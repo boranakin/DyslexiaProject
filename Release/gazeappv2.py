@@ -1,188 +1,109 @@
-from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QWidget, QPushButton, QVBoxLayout, QDialog
+from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QWidget, QPushButton, QVBoxLayout, QHBoxLayout
 from PyQt5.QtGui import QPainter, QColor, QFont, QFontMetrics
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
-import sys
-import time
-import subprocess
-import datetime
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+import sys, time, subprocess, datetime, numpy as np
 
 def normalize_gaze_to_screen(gaze_point, screen_width, screen_height):
     x, y = gaze_point
-    screen_x = (x + 1) / 2 * screen_width
-    screen_y = (1 - y) / 2 * screen_height
-    return int(screen_x), int(screen_y)
+    return int((x + 1) / 2 * screen_width), int((1 - y) / 2 * screen_height)
 
-class HeatmapOverlay(QWidget):
-    def __init__(self, gaze_points, parent=None):
+class Overlay(QWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
+        self.setAttributes()
+
+    def setAttributes(self):
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.gaze_points = gaze_points
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
+
+class HeatmapOverlay(Overlay):
+    def __init__(self, gaze_points, parent=None):
+        super().__init__(parent)
+        self.gaze_points = gaze_points
 
     def paintEvent(self, event):
         qp = QPainter(self)
         qp.setRenderHint(QPainter.Antialiasing)
 
-        # Generate the heatmap matrix based on gaze points
-        heatmap, xedges, yedges = np.histogram2d([x for x, y in self.gaze_points], [y for x, y in self.gaze_points], bins=(50, 50))
+        # Assuming self.gaze_points is a list of tuples like [(x, y, timestamp), ...]
+        # Extract just the x and y coordinates for the heatmap
+        gaze_points_xy = [(point[0], point[1]) for point in self.gaze_points]
 
-        # Normalize the heatmap for display purposes
-        heatmap = heatmap / np.max(heatmap)
+        # Generate the heatmap based on the x and y coordinates
+        heatmap, xedges, yedges = np.histogram2d(*zip(*gaze_points_xy), bins=(50, 50))
+        heatmap /= np.max(heatmap)  # Normalize
 
-        # Map the heatmap values to colors and draw rectangles
+        # Draw the heatmap rectangles
         for i in range(len(xedges)-1):
             for j in range(len(yedges)-1):
                 intensity = heatmap[i, j]
-                color = QColor(255, 0, 0, int(255 * intensity))  # Red with variable opacity
+                color = QColor(255, 0, 0, int(255 * intensity))  # Map intensity to opacity
                 qp.setBrush(color)
-                qp.setPen(Qt.NoPen)
+                qp.setPen(Qt.NoPen)  # No border
+                # Draw rectangle
+                qp.drawRect(QRect(int(xedges[i]), int(yedges[j]), int(xedges[i+1] - xedges[i]), int(yedges[j+1] - yedges[j])))
 
-                # Convert float values to integers
-                x1 = int(xedges[i])
-                y1 = int(yedges[j])
-                x2 = int(xedges[i+1])
-                y2 = int(yedges[j+1])
-                width = x2 - x1
-                height = y2 - y1
-
-                rect = QRect(x1, y1, width, height)
-                qp.drawRect(rect)
-
-
-class GazeOverlay(QWidget):
+class GazeOverlay(Overlay):
     def __init__(self, parent=None):
-        super(GazeOverlay, self).__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.gaze_x = 0
-        self.gaze_y = 0
-        self.circle_radius = 20
+        super().__init__(parent)
+        self.gaze_x, self.gaze_y, self.circle_radius = 0, 0, 20
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(QColor(255, 165, 0, 128))
-        painter.setPen(Qt.NoPen)
-        painter.drawEllipse(self.gaze_x - self.circle_radius, self.gaze_y - self.circle_radius, self.circle_radius * 2, self.circle_radius * 2)
+        qp = QPainter(self)
+        qp.setRenderHint(QPainter.Antialiasing)
+        qp.setBrush(QColor(255, 165, 0, 128))
+        qp.setPen(Qt.NoPen)
+        qp.drawEllipse(self.gaze_x - self.circle_radius, self.gaze_y - self.circle_radius, 2 * self.circle_radius, 2 * self.circle_radius)
 
     def update_gaze_position(self, x, y):
-        self.gaze_x = x
-        self.gaze_y = y
+        self.gaze_x, self.gaze_y = x, y
         self.update()
 
 class GazeDataProcessor(QThread):
-    update_gaze_signal = pyqtSignal(int, int)
+    update_gaze_signal = pyqtSignal(datetime.datetime, int, int)
 
     def __init__(self, gaze_data, screen_width, screen_height, word_labels, words):
         super().__init__()
-        self.gaze_data = gaze_data
-        self.screen_width = screen_width
-        self.screen_height = screen_height
-        self.word_labels = word_labels
-        self.words = words
-        self.hit_counts = [0] * len(word_labels)
-        self.hit_timestamps = [[] for _ in word_labels]
-        
+        self.gaze_data, self.screen_width, self.screen_height = gaze_data, screen_width, screen_height
+        self.word_labels, self.words = word_labels, words
+
     def run(self):
         for line in self.gaze_data:
-            if 'Gaze point:' in line:
-                gaze_point = line.split('[')[1].split(']')[0]
-                x, y = map(float, gaze_point.split(','))
-                screen_x, screen_y = normalize_gaze_to_screen((x, y), self.screen_width, self.screen_height)
-                self.update_gaze_signal.emit(screen_x, screen_y)
-                self.check_gaze_hit(screen_x, screen_y)
-                time.sleep(0.1)
-        self.write_hit_counts_to_file()
-
-    def check_gaze_hit(self, x, y):
-        for index, label in enumerate(self.word_labels):
-            if label.geometry().contains(x, y):
-                self.hit_counts[index] += 1
-                current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.hit_timestamps[index].append(current_time)
-
-    def write_hit_counts_to_file(self):
-        with open('word_hit_counts.txt', 'w') as file:
-            for word, count, timestamps in zip(self.words, self.hit_counts, self.hit_timestamps):
-                timestamps_str = ', '.join(timestamps)
-                file.write(f"{word}: {count} - Timestamps: {timestamps_str}\n")
+            # Splitting line into timestamp and gaze point
+            timestamp_str, gaze_str = line.split('] Gaze point: ')
+            timestamp = datetime.datetime.strptime(timestamp_str[1:], "%Y-%m-%d %H:%M:%S.%f")
+            gaze_point = [float(val) for val in gaze_str.strip()[1:-1].split(',')]
+            screen_x, screen_y = normalize_gaze_to_screen(gaze_point, self.screen_width, self.screen_height)
+            self.update_gaze_signal.emit(timestamp, screen_x, screen_y)
+            time.sleep(0.1)  # Adjust based on your requirements
 
 class GazeVisualizer(QMainWindow):
     def __init__(self, screen_width, screen_height):
         super().__init__()
-        self.initUI(screen_width, screen_height)
-        self.recording_process = None
+        self.screen_width, self.screen_height = screen_width, screen_height
+        self.setupUI()
 
-    def startRecording(self, calibration_mode=False):
-        open('gazeData.txt', 'w').close()
-        window_handle = self.winId()
-        window_handle_int = int(window_handle.__int__())
-        cpp_executable_path = "path/to/executable"
-        self.recording_process = subprocess.Popen([cpp_executable_path, str(window_handle_int)])
+    def setupUI(self):
+        self.setGeometry(100, 100, self.screen_width, self.screen_height)
+        self.setWindowTitle('Gaze Tracker')
+        self.setupLabels()
+        self.setupButtons()
+        self.gaze_overlay = GazeOverlay(self)
+        self.gaze_overlay.setGeometry(0, 0, self.screen_width, self.screen_height)
 
-    def stopRecording(self):
-        if self.recording_process:
-            self.recording_process.terminate()
-
-    def createAndDisplayHeatmap(self, gaze_points):
-        screen_gaze_points = [(x * self.width() / 2 + self.width() / 2, -y * self.height() / 2 + self.height() / 2) for x, y in gaze_points]
-        heatmap, xedges, yedges = np.histogram2d([x for x, y in screen_gaze_points], [y for x, y in screen_gaze_points], bins=(50, 50))
-        fig, ax = plt.subplots()
-        cax = ax.imshow(heatmap.T, extent=[0, self.width(), 0, self.height()], origin='lower', cmap='hot', interpolation='nearest')
-        fig.colorbar(cax)
-        ax.set_title('Gaze Heatmap')
-        ax.set_xlabel('Screen X')
-        ax.set_ylabel('Screen Y')
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Gaze Heatmap")
-        layout = QVBoxLayout(dialog)
-        canvas = FigureCanvasQTAgg(fig)
-        layout.addWidget(canvas)
-        dialog.exec_()
-
-    def showHeatmap(self):
-        with open('gazeData.txt', 'r') as file:
-            gaze_data = file.readlines()
-        gaze_points = []
-        for line in gaze_data:
-            if 'Gaze point:' in line:
-                gaze_point = line.split('[')[1].split(']')[0]
-                x, y = map(float, gaze_point.split(','))
-                gaze_points.append((x, y))
-        self.createAndDisplayHeatmap(gaze_points)
-
-    def showHeatmapOnText(self):
-        with open('gazeData.txt', 'r') as file:
-            gaze_data = file.readlines()
-        gaze_points = []
-        for line in gaze_data:
-            if 'Gaze point:' in line:
-                gaze_point = line.split('[')[1].split(']')[0]
-                x, y = map(float, gaze_point.split(','))
-                screen_x, screen_y = normalize_gaze_to_screen((x, y), self.width(), self.height())
-                gaze_points.append((screen_x, screen_y))
-        self.heatmap_overlay = HeatmapOverlay(gaze_points, self)
-        self.heatmap_overlay.setGeometry(0, 0, self.width(), self.height())
-        self.heatmap_overlay.show()
-
-    def initUI(self, screen_width, screen_height):
-        margin_horizontal = screen_width // 3
-        margin_vertical = screen_height // 4
-        self.text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum."
-        self.words = self.text.split()
+    def setupLabels(self):
+        text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry..."
+        self.words = text.split()
         font = QFont('Calibri', 22)
-        fm = QFontMetrics(font)
+        x, y = self.screen_width // 3, self.screen_height // 4
+        line_height = QFontMetrics(font).height()
         self.labels = []
-        x = margin_horizontal
-        y = margin_vertical
-        line_height = fm.height()
+
         for word in self.words:
-            word_width = fm.width(word)
-            if x + word_width > screen_width - margin_horizontal:
-                x = margin_horizontal
+            word_width = QFontMetrics(font).width(word)
+            if x + word_width > self.screen_width - self.screen_width // 3:
+                x = self.screen_width // 3
                 y += line_height + 10
             label = QLabel(word, self)
             label.setFont(font)
@@ -191,68 +112,131 @@ class GazeVisualizer(QMainWindow):
             label.show()
             self.labels.append(label)
             x += word_width + 10
-        self.setGeometry(100, 100, screen_width, screen_height)
-        self.setWindowTitle('Gaze Tracker')
-        self.gaze_overlay = GazeOverlay(self)
-        self.gaze_overlay.setGeometry(0, 0, screen_width, screen_height)
-        button_width = 150
-        button_height = 50
-        button_x = (screen_width - button_width * 2 - 20) // 2
-        button_y = screen_height - button_height - 20
 
-        self.playback_button = QPushButton('Playback', self)
-        self.playback_button.clicked.connect(self.startPlayback)
-        self.playback_button.setGeometry(button_x, button_y, button_width, button_height)
-        self.playback_button.setStyleSheet("QPushButton { background-color: orange; font-size: 18px; }")
-        
-        self.record_button = QPushButton('Record', self)
-        self.record_button.setGeometry(button_x + button_width + 20, button_y, button_width, button_height)
-        self.record_button.setStyleSheet("QPushButton { background-color: orange; font-size: 18px; }")
-        self.record_button.clicked.connect(self.startRecording)
-        
-        self.stop_button = QPushButton('Stop Playback', self)
-        self.stop_button.setGeometry(button_x + button_width * 2 + 40, button_y, button_width, button_height)
-        self.stop_button.setStyleSheet("QPushButton { background-color: orange; font-size: 18px; }")
-        self.stop_button.clicked.connect(self.stopPlayback)
-        
-        self.heatmap_on_text_button = QPushButton('Project Heatmap', self)
-        self.heatmap_on_text_button.setGeometry(button_x + button_width * 3 + 60, button_y, button_width, button_height)
-        self.heatmap_on_text_button.setStyleSheet("QPushButton { background-color: orange; font-size: 18px; }")
-        self.heatmap_on_text_button.clicked.connect(self.showHeatmapOnText)
-        
-        self.heatmap_button = QPushButton('Show Heatmap', self)
-        self.heatmap_button.setGeometry(button_x + button_width * 4 + 80, button_y, button_width, button_height)
-        self.heatmap_button.setStyleSheet("QPushButton { background-color: orange; font-size: 18px; }")
-        self.heatmap_button.clicked.connect(self.showHeatmap)
-        
-        self.stop_record_button = QPushButton('Stop Recording', self)
-        self.stop_record_button.setGeometry(button_x + button_width * 5 + 100, button_y, button_width, button_height)
-        self.stop_record_button.setStyleSheet("QPushButton { background-color: orange; font-size: 18px; }")
-        self.stop_record_button.clicked.connect(self.stopRecording)
+    def setupButtons(self):
+        # Create a central widget and set a vertical layout on it
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
 
+        # Create a horizontal layout for the buttons
+        button_layout = QHBoxLayout()
+
+        # Define your button functionalities and names
+        functions = [
+            (self.startPlayback, 'Playback'),
+            (self.startRecording, 'Record'),
+            (self.stopPlayback, 'Stop Playback'),
+            (self.showHeatmapOnText, 'Project Heatmap'),
+            (self.stopRecording, 'Stop Recording')
+        ]
+
+        # Create and add buttons to the horizontal layout
+        for func, name in functions:
+            button = QPushButton(name)
+            button.clicked.connect(func)
+            button.setFixedSize(230, 60)  # Set button size to 200x50 pixels
+            #button.setStyleSheet("QPushButton { font-size: 22pt; background-color: #FEB046; border-radius: 15px;  }")  # Set button stylesheet for larger font size
+            button.setStyleSheet("""
+                QPushButton {
+                    font-size: 18pt;
+                    color: #FFFFFF;
+                    border-radius: 15px;
+                    background-color: qlineargradient(
+                        spread:pad, x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #FF973C, stop:1 #FF973C);
+                    padding: 5px;
+                    border: 4px solid #DBDBDB;
+                }
+                QPushButton:hover {
+                    background-color: qlineargradient(
+                        spread:pad, x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #7e57c2, stop:1 #9575cd);
+                }
+                QPushButton:pressed {
+                    background-color: qlineargradient(
+                        spread:pad, x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #4a148c, stop:1 #6a1b9a);
+                }
+            """)
+            button_layout.addWidget(button)
+
+         # Add fixed spacing to main layout before adding buttons to move them higher up
+        main_layout.addSpacing(1000)  # Adjust the value to control the height above the buttons
+
+        # Add the horizontal layout with buttons to the main layout
+        main_layout.addLayout(button_layout)
+
+        # Optional: Adjust spacing and margins if needed
+        main_layout.setSpacing(10)  # Set spacing between widgets
+        main_layout.setContentsMargins(10, 10, 10, 30)  # Set margins of the layout
+        button_layout.setSpacing(10)  # Set spacing between buttons
+
+        # Simplified "Exit" button with a minimal stylesheet
+        exit_button = QPushButton('X')
+        exit_button.setFixedSize(50, 50)  # Smaller size for a minimalistic button
+        exit_button.clicked.connect(self.close)  # Connects to the window's close function
+        exit_button.setStyleSheet("""
+            QPushButton {
+                font-size: 18pt;
+                color: #FFFFFF;
+                border: 2px solid #555;
+                background-color: #333;
+                border-radius: 15px;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+            QPushButton:pressed {
+                background-color: #777;
+            }
+        """)
+        button_layout.addWidget(exit_button)
+
+    def startRecording(self):
+        open('gazeData.txt', 'w').close()
+        self.recording_process = subprocess.Popen(["C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/Tobii_api_test1", str(self.winId().__int__())])
+
+    def stopRecording(self):
+        if self.recording_process:
+            self.recording_process.terminate()
+
+    def showHeatmapOnText(self):
+        gaze_points = []
+        with open('gazeData.txt', 'r') as file:
+            for line in file:
+                if 'Gaze point:' in line:
+                    _, gaze_str = line.split('] Gaze point: ')
+                    gaze_point = [float(val) for val in gaze_str.strip()[1:-1].split(',')]
+                    # Normalize gaze points for the screen dimensions
+                    screen_x, screen_y = normalize_gaze_to_screen(gaze_point, self.width(), self.height())
+                    gaze_points.append((screen_x, screen_y))
+
+        # Debugging: Print the number of parsed gaze points
+        print(f"Number of parsed gaze points: {len(gaze_points)}")
+
+        if len(gaze_points) > 0:
+            self.heatmap_overlay = HeatmapOverlay(gaze_points, self)
+            self.heatmap_overlay.setGeometry(0, 0, self.width(), self.height())
+            self.heatmap_overlay.show()
+            self.heatmap_overlay.update()  # Explicitly request an update
+        else:
+            print("No gaze points parsed or heatmap overlay not properly set up.")
+
+    # Update startPlayback function similarly to handle timestamp and gaze points
     def startPlayback(self):
+        gaze_data = []
         with open('gazeData.txt', 'r') as file:
             gaze_data = file.readlines()
         self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels, self.words)
-        self.gaze_processor.update_gaze_signal.connect(self.gaze_overlay.update_gaze_position)
+        self.gaze_processor.update_gaze_signal.connect(lambda ts, x, y: self.gaze_overlay.update_gaze_position(x, y))
         self.gaze_processor.start()
 
     def stopPlayback(self):
         if self.gaze_processor and self.gaze_processor.isRunning():
             self.gaze_processor.terminate()
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setPen(Qt.NoPen)
-        color = QColor(255, 255, 255, 128)
-        painter.setBrush(color)
-        for label in self.labels:
-            rect = label.geometry()
-            painter.drawRect(rect)
-
 app = QApplication(sys.argv)
-screen_resolution = app.desktop().screenGeometry()
-width, height = screen_resolution.width(), screen_resolution.height()
-main_window = GazeVisualizer(width, height)
+main_window = GazeVisualizer(app.desktop().screenGeometry().width(), app.desktop().screenGeometry().height())
 main_window.showFullScreen()
 sys.exit(app.exec_())
