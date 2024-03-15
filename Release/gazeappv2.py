@@ -2,10 +2,14 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QWidget, QPushBut
 from PyQt5.QtGui import QPainter, QColor, QFont, QFontMetrics
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
 import sys, time, subprocess, datetime, numpy as np
+from datetime import datetime
 
 def normalize_gaze_to_screen(gaze_point, screen_width, screen_height):
+    y_offset = 180  # Adjust this value as needed to correct the offset
     x, y = gaze_point
-    return int((x + 1) / 2 * screen_width), int((1 - y) / 2 * screen_height)
+    screen_x = int((x + 1) / 2 * screen_width)
+    screen_y = int((1 - y) / 2 * screen_height) + y_offset  # Subtract the offset here
+    return screen_x, screen_y
 
 class Overlay(QWidget):
     def __init__(self, parent=None):
@@ -60,23 +64,45 @@ class GazeOverlay(Overlay):
         self.gaze_x, self.gaze_y = x, y
         self.update()
 
-class GazeDataProcessor(QThread):
-    update_gaze_signal = pyqtSignal(datetime.datetime, int, int)
+#hit count format: typesetting, 2, (2024-03-02 16:39:30, 2024-03-02 16:40:30)
 
-    def __init__(self, gaze_data, screen_width, screen_height, word_labels, words):
+class GazeDataProcessor(QThread):
+    update_gaze_signal = pyqtSignal(datetime, int, int)
+
+    def __init__(self, gaze_data, screen_width, screen_height, word_labels):
         super().__init__()
-        self.gaze_data, self.screen_width, self.screen_height = gaze_data, screen_width, screen_height
-        self.word_labels, self.words = word_labels, words
+        self.gaze_data = gaze_data
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        # word_labels now contains tuples of (identifier, QLabel object, word text)
+        self.word_labels = word_labels
+        # Initialize with tuples of (identifier, word text)
+        self.word_hits = {(label[0], label[2]): {'count': 0, 'timestamps': []} for label in word_labels}
 
     def run(self):
         for line in self.gaze_data:
-            # Splitting line into timestamp and gaze point
             timestamp_str, gaze_str = line.split('] Gaze point: ')
-            timestamp = datetime.datetime.strptime(timestamp_str[1:], "%Y-%m-%d %H:%M:%S.%f")
+            timestamp = datetime.strptime(timestamp_str[1:], "%Y-%m-%d %H:%M:%S.%f")
             gaze_point = [float(val) for val in gaze_str.strip()[1:-1].split(',')]
             screen_x, screen_y = normalize_gaze_to_screen(gaze_point, self.screen_width, self.screen_height)
+
+            # Iterate over word labels
+            for identifier, label_obj, word in self.word_labels:
+                if label_obj.geometry().contains(screen_x, screen_y):
+                    key = (identifier, word)
+                    self.word_hits[key]['count'] += 1
+                    self.word_hits[key]['timestamps'].append(timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"))
+
             self.update_gaze_signal.emit(timestamp, screen_x, screen_y)
-            time.sleep(0.1)  # Adjust based on your requirements
+            time.sleep(0.01)  # Adjust as needed
+
+    def write_hit_counts_to_file(self, filename='word_hit_counts.txt'):
+        with open(filename, 'w') as file:
+            for (identifier, word), data in self.word_hits.items():
+                timestamps_str = ', '.join(data['timestamps'])
+                # Write both the identifier and word text
+                file.write(f"{identifier} - {word}: {data['count']} - Timestamps: {timestamps_str}\n")
+
 
 class GazeVisualizer(QMainWindow):
     def __init__(self, screen_width, screen_height):
@@ -93,25 +119,32 @@ class GazeVisualizer(QMainWindow):
         self.gaze_overlay.setGeometry(0, 0, self.screen_width, self.screen_height)
 
     def setupLabels(self):
-        text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry..."
+        text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum."
         self.words = text.split()
-        font = QFont('Calibri', 22)
-        x, y = self.screen_width // 3, self.screen_height // 4
+        font = QFont('Calibri', 30)
+        x, y = self.screen_width // 4, self.screen_height // 4
         line_height = QFontMetrics(font).height()
-        self.labels = []
+        self.labels = []  # This will now store tuples of (identifier, QLabel object, word text)
+        line_number = 1
+        word_index = 1
 
         for word in self.words:
             word_width = QFontMetrics(font).width(word)
             if x + word_width > self.screen_width - self.screen_width // 3:
                 x = self.screen_width // 3
                 y += line_height + 10
+                line_number += 1
+                word_index = 1  # Reset word index for the new line
+            identifier = f"{line_number}-{word_index}"
             label = QLabel(word, self)
             label.setFont(font)
             label.resize(word_width, line_height)
             label.move(x, y)
             label.show()
-            self.labels.append(label)
+            self.labels.append((identifier, label, word))  # Store identifier, QLabel, and word text
             x += word_width + 10
+            word_index += 1
+
 
     def setupButtons(self):
         # Create a central widget and set a vertical layout on it
@@ -228,13 +261,22 @@ class GazeVisualizer(QMainWindow):
         gaze_data = []
         with open('gazeData.txt', 'r') as file:
             gaze_data = file.readlines()
-        self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels, self.words)
+
+        # Pass self.labels directly, as it contains the tuples of identifiers and QLabel objects
+        self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels)
         self.gaze_processor.update_gaze_signal.connect(lambda ts, x, y: self.gaze_overlay.update_gaze_position(x, y))
         self.gaze_processor.start()
+
 
     def stopPlayback(self):
         if self.gaze_processor and self.gaze_processor.isRunning():
             self.gaze_processor.terminate()
+
+    def closeEvent(self, event):
+        # Check if gaze_processor exists and call write_hit_counts_to_file
+        if hasattr(self, 'gaze_processor') and self.gaze_processor is not None:
+            self.gaze_processor.write_hit_counts_to_file()
+        super().closeEvent(event)
 
 app = QApplication(sys.argv)
 main_window = GazeVisualizer(app.desktop().screenGeometry().width(), app.desktop().screenGeometry().height())
