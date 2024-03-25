@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QWidget, QPushButton, QVBoxLayout, QHBoxLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QSpacerItem, QSizePolicy
 from PyQt5.QtGui import QPainter, QColor, QFont, QFontMetrics
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
 import sys, time, subprocess, datetime, numpy as np
@@ -11,9 +11,49 @@ def normalize_gaze_to_screen(gaze_point, screen_width, screen_height):
     screen_y = int((1 - y) / 2 * screen_height) + y_offset  # Subtract the offset here
     return screen_x, screen_y
 
+# Convert string timestamps to datetime objects and calculate dwell times
+def calculate_dwell_times(gaze_data):
+    dwell_data = []
+    last_point = None
+    last_timestamp = None
+    accumulated_time = 0
+
+    for line in gaze_data:
+        timestamp_str, _, gaze_str = line.partition('] Gaze point: ')
+        timestamp = datetime.strptime(timestamp_str.strip('['), "%Y-%m-%d %H:%M:%S.%f")
+        gaze_point = tuple(float(val) for val in gaze_str.strip('[]').split(', '))
+
+        if last_point is not None:
+            time_diff = (timestamp - last_timestamp).total_seconds()
+            distance = ((gaze_point[0] - last_point[0]) * 2 + (gaze_point[1] - last_point[1]) * 2) ** 0.5
+            # Check if the gaze is still within a fixation (this threshold may need to be adjusted)
+            if distance < 0.1 and time_diff < 1:
+                accumulated_time += time_diff
+            else:
+                # The fixation has ended; save the accumulated dwell time for the last point
+                dwell_data.append((last_timestamp, last_point[0], last_point[1], accumulated_time))
+                accumulated_time = 0  # Reset for the next fixation
+
+        last_point = gaze_point
+        last_timestamp = timestamp
+
+    # Don't forget to add the last fixation's dwell time
+    if accumulated_time > 0:
+        dwell_data.append((last_timestamp, last_point[0], last_point[1], accumulated_time))
+
+    return dwell_data
+
+# Example usage
+gaze_data_example = [
+    "[2024-03-25 12:59:56.961] Gaze point: [-0.615992, 0.437235]",
+    # ... all your other gaze data lines ...
+]
+dwell_data = calculate_dwell_times(gaze_data_example)
+
+
 class Overlay(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def _init_(self, parent=None):
+        super()._init_(parent)
         self.setAttributes()
 
     def setAttributes(self):
@@ -22,55 +62,66 @@ class Overlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
 class HeatmapOverlay(Overlay):
-    def __init__(self, gaze_points, parent=None):
-        super().__init__(parent)
+    def _init_(self, gaze_points, parent=None):
+        super()._init_(parent)
         self.gaze_points = gaze_points
+        # Dynamically adjust the number of bins based on the screen size
+        self.bins = max(min(parent.width(), parent.height()) // 100, 10)  # Example dynamic calculation
 
     def paintEvent(self, event):
         qp = QPainter(self)
         qp.setRenderHint(QPainter.Antialiasing)
 
-        # Assuming self.gaze_points is a list of tuples like [(x, y, timestamp), ...]
-        # Extract just the x and y coordinates for the heatmap
         gaze_points_xy = [(point[0], point[1]) for point in self.gaze_points]
-
-        # Generate the heatmap based on the x and y coordinates
-        heatmap, xedges, yedges = np.histogram2d(*zip(*gaze_points_xy), bins=(50, 50))
+        # Use self.bins for the bins parameter to make it dynamic
+        heatmap, xedges, yedges = np.histogram2d(*zip(*gaze_points_xy), bins=(self.bins, self.bins))
         heatmap /= np.max(heatmap)  # Normalize
 
-        # Draw the heatmap rectangles
         for i in range(len(xedges)-1):
             for j in range(len(yedges)-1):
                 intensity = heatmap[i, j]
-                color = QColor(255, 0, 0, int(255 * intensity))  # Map intensity to opacity
+                color = QColor(255, 0, 0, int(255 * intensity))
                 qp.setBrush(color)
-                qp.setPen(Qt.NoPen)  # No border
-                # Draw rectangle
+                qp.setPen(Qt.NoPen)
                 qp.drawRect(QRect(int(xedges[i]), int(yedges[j]), int(xedges[i+1] - xedges[i]), int(yedges[j+1] - yedges[j])))
 
+
+
+
 class GazeOverlay(Overlay):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.gaze_x, self.gaze_y, self.circle_radius = 0, 0, 20
+    def _init_(self, parent=None):
+        super()._init_(parent)
+        self.gaze_x, self.gaze_y = 0, 0
+        # Calculate the base circle radius dynamically based on the parent size
+        # The factor (e.g., 0.06 for 6%) determines the size of the pointer relative to the window
+        self.update_base_circle_radius()
+
+    def update_base_circle_radius(self):
+        # Dynamically update the base circle radius based on the current window size
+        self.base_circle_radius = min(self.parent().width(), self.parent().height()) * 0.03
 
     def paintEvent(self, event):
+        self.update_base_circle_radius()  # Ensure the base radius is updated to reflect any window resizing
         qp = QPainter(self)
         qp.setRenderHint(QPainter.Antialiasing)
-        qp.setBrush(QColor(255, 165, 0, 128))
+        qp.setBrush(QColor(255, 165, 0, 128))  # Semi-transparent orange
         qp.setPen(Qt.NoPen)
-        qp.drawEllipse(self.gaze_x - self.circle_radius, self.gaze_y - self.circle_radius, 2 * self.circle_radius, 2 * self.circle_radius)
+        # Use self.base_circle_radius directly in drawing the ellipse
+        qp.drawEllipse(self.gaze_x - self.base_circle_radius, self.gaze_y - self.base_circle_radius,
+                       2 * self.base_circle_radius, 2 * self.base_circle_radius)
 
     def update_gaze_position(self, x, y):
         self.gaze_x, self.gaze_y = x, y
-        self.update()
+        self.update()  # Trigger a repaint with the updated position
+
 
 #hit count format: typesetting, 2, (2024-03-02 16:39:30, 2024-03-02 16:40:30)
 
 class GazeDataProcessor(QThread):
     update_gaze_signal = pyqtSignal(datetime, int, int)
 
-    def __init__(self, gaze_data, screen_width, screen_height, word_labels):
-        super().__init__()
+    def _init_(self, gaze_data, screen_width, screen_height, word_labels):
+        super()._init_()
         self.gaze_data = gaze_data
         self.screen_width = screen_width
         self.screen_height = screen_height
@@ -94,7 +145,7 @@ class GazeDataProcessor(QThread):
                     self.word_hits[key]['timestamps'].append(timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"))
 
             self.update_gaze_signal.emit(timestamp, screen_x, screen_y)
-            time.sleep(0.01)  # Adjust as needed
+            time.sleep(0.02)  # Adjust as needed
 
     def write_hit_counts_to_file(self, filename='word_hit_counts.txt'):
         with open(filename, 'w') as file:
@@ -105,14 +156,19 @@ class GazeDataProcessor(QThread):
 
 
 class GazeVisualizer(QMainWindow):
-    def __init__(self, screen_width, screen_height):
-        super().__init__()
+    def _init_(self, screen_width, screen_height):
+        super()._init_()
         self.screen_width, self.screen_height = screen_width, screen_height
+        self.dwell_data = None
         self.setupUI()
 
     def setupUI(self):
         self.setGeometry(100, 100, self.screen_width, self.screen_height)
         self.setWindowTitle('Gaze Tracker')
+        logical_dpi_x = QApplication.screens()[0].logicalDotsPerInchX()
+        # Scale factor based on standard DPI (96 is often used as the standard DPI)
+        self.dpi_scale_factor = logical_dpi_x / 96
+        # Now call setupLabels and setupButtons which will use this scale factor
         self.setupLabels()
         self.setupButtons()
         self.gaze_overlay = GazeOverlay(self)
@@ -120,119 +176,166 @@ class GazeVisualizer(QMainWindow):
 
     def setupLabels(self):
         text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum."
-        self.words = text.split()
-        font = QFont('Calibri', 30)
-        x, y = self.screen_width // 4, self.screen_height // 4
-        line_height = QFontMetrics(font).height()
-        self.labels = []  # This will now store tuples of (identifier, QLabel object, word text)
-        line_number = 1
-        word_index = 1
 
-        for word in self.words:
-            word_width = QFontMetrics(font).width(word)
-            if x + word_width > self.screen_width - self.screen_width // 3:
-                x = self.screen_width // 3
-                y += line_height + 10
-                line_number += 1
-                word_index = 1  # Reset word index for the new line
-            identifier = f"{line_number}-{word_index}"
+        # Base font size and scaling factor
+        base_font_size = 12  # Base size for calculation
+        screen_height = self.screen_height  # Use the screen height for scaling
+        
+        # Adjust font size based on screen height
+        font_scaling_factor = screen_height / 1080  # Assuming 1080p as base
+        # Adjust font size based on DPI scale factor
+        font_size = max(int(base_font_size * self.dpi_scale_factor), 50)
+
+        font = QFont('Calibri', font_size)
+        fm = QFontMetrics(font)
+        line_height = fm.height()
+
+        words = text.split()
+        max_line_width = self.screen_width * 0.8  # Use 80% of screen width for text
+
+        x_start = self.screen_width * 0.1  # Start 10% from the left
+        y_start = self.screen_height * 0.2  # Start 30% from the top, adjust as needed
+        x, y = x_start, y_start
+
+        self.labels = []  # This will store tuples of (identifier, QLabel object, word text)
+        line_spacing_factor = 1.5  # Adjust this factor to increase line spacing, 1.5 means 150% of line height
+
+        for word in words:
+            word_width = fm.width(word + ' ')  # Include space in width calculation
+            if x + word_width > self.screen_width - x_start:  # Check if the word exceeds the max line width
+                x = x_start  # Reset x to start of line
+                y += int(line_height * line_spacing_factor)  # Increase y by the line height with added spacing
+
+            identifier = f"{y}-{x}"  # Using the starting position as a simple identifier
             label = QLabel(word, self)
             label.setFont(font)
-            label.resize(word_width, line_height)
-            label.move(x, y)
+            label.adjustSize()  # Adjust label size to fit text
+            label.move(int(x), int(y))
             label.show()
             self.labels.append((identifier, label, word))  # Store identifier, QLabel, and word text
-            x += word_width + 10
-            word_index += 1
 
+            x += word_width  # Move x for the next word
+
+        # Center the text block vertically if it doesn't fill the screen
+        """total_text_height = y + line_height - y_start
+        if total_text_height < self.screen_height * 0.6:  # If text block is smaller than 60% of screen height
+            extra_space = (self.screen_height * 0.6 - total_text_height) / 2
+            for identifier, label, word in self.labels:
+                label.move(label.x(), int(label.y() + extra_space))"""
+        total_text_height = y + line_height - y_start
+        if total_text_height < self.screen_height * 0.6:  # If text block is smaller than 60% of screen height
+            extra_space = (self.screen_height * 0.6 - total_text_height) / 2
+            total_text_height += 2 * extra_space  # Adjust total height based on extra space added
+            for identifier, label, word in self.labels:
+                label.move(label.x(), int(label.y() + extra_space))
+
+        # Store the total text height as an attribute for later use
+        self.total_text_height = total_text_height + y_start  # Add y_start to include the initial offset
 
     def setupButtons(self):
-        # Create a central widget and set a vertical layout on it
+        # Calculate dynamic sizes and spacing based on screen dimensions
+        button_width = int(self.screen_width * 0.15 * self.dpi_scale_factor)
+        button_height = int(self.screen_height * 0.07 * self.dpi_scale_factor)
+        exit_button_size = int(self.screen_height * 0.08 * self.dpi_scale_factor)
+        layout_spacing = int(self.screen_width * 0.01)  # 1% of screen width for spacing between elements
+
+        # Central widget setup for overall layout management
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(layout_spacing)
+        main_layout.setContentsMargins(layout_spacing, layout_spacing, layout_spacing, layout_spacing)
 
-        # Create a horizontal layout for the buttons
+        # Calculate the spacer size to push buttons down based on the total text height
+        spacer_height = max(self.screen_height * 0.05, self.total_text_height + self.screen_height * 0.05 - self.screen_height * 0.5)
+        spacer = QSpacerItem(20, spacer_height, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        main_layout.addItem(spacer)
+
         button_layout = QHBoxLayout()
-
-        # Define your button functionalities and names
         functions = [
             (self.startPlayback, 'Playback'),
             (self.startRecording, 'Record'),
             (self.stopPlayback, 'Stop Playback'),
             (self.showHeatmapOnText, 'Project Heatmap'),
-            (self.stopRecording, 'Stop Recording')
+            (self.stopRecording, 'Stop Recording'),
         ]
 
-        # Create and add buttons to the horizontal layout
         for func, name in functions:
             button = QPushButton(name)
             button.clicked.connect(func)
-            button.setFixedSize(230, 60)  # Set button size to 200x50 pixels
-            #button.setStyleSheet("QPushButton { font-size: 22pt; background-color: #FEB046; border-radius: 15px;  }")  # Set button stylesheet for larger font size
-            button.setStyleSheet("""
-                QPushButton {
-                    font-size: 18pt;
-                    color: #FFFFFF;
-                    border-radius: 15px;
+            button.setFixedSize(button_width, button_height)  # Keep dynamic sizing
+            # Apply the dynamic visual styling with gradient effects here
+            button.setStyleSheet(f"""
+                QPushButton {{
+                    font-size: {int(button_height * 0.15)}pt;
+                    color: white;
+                    border-radius: {button_height // 2}px;
                     background-color: qlineargradient(
-                        spread:pad, x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #FF973C, stop:1 #FF973C);
+                        spread:pad, x1:0, y1:0.5, x2:1, y2:0.5,
+                        stop:0 rgba(126, 87, 194, 1), stop:1 rgba(149, 117, 205, 1));
+                    border: 1px solid #DBDBDB;
                     padding: 5px;
-                    border: 4px solid #DBDBDB;
-                }
-                QPushButton:hover {
+                }}
+                QPushButton:hover {{
                     background-color: qlineargradient(
-                        spread:pad, x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #7e57c2, stop:1 #9575cd);
-                }
-                QPushButton:pressed {
+                        spread:pad, x1:0, y1:0.5, x2:1, y2:0.5,
+                        stop:0 rgba(255, 151, 60, 1), stop:1 rgba(255, 193, 7, 1));
+                }}
+                QPushButton:pressed {{
                     background-color: qlineargradient(
-                        spread:pad, x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #4a148c, stop:1 #6a1b9a);
-                }
+                        spread:pad, x1:0, y1:0.5, x2:1, y2:0.5,
+                        stop:0 rgba(221, 44, 0, 1), stop:1 rgba(255, 109, 0, 1));
+                }}
             """)
             button_layout.addWidget(button)
 
-         # Add fixed spacing to main layout before adding buttons to move them higher up
-        main_layout.addSpacing(1000)  # Adjust the value to control the height above the buttons
-
-        # Add the horizontal layout with buttons to the main layout
         main_layout.addLayout(button_layout)
 
-        # Optional: Adjust spacing and margins if needed
-        main_layout.setSpacing(10)  # Set spacing between widgets
-        main_layout.setContentsMargins(10, 10, 10, 30)  # Set margins of the layout
-        button_layout.setSpacing(10)  # Set spacing between buttons
+        # Your existing setup for the "Exit" button...
 
-        # Simplified "Exit" button with a minimal stylesheet
+        # Customize the "Exit" button with dynamic styling and sizing
         exit_button = QPushButton('X')
-        exit_button.setFixedSize(50, 50)  # Smaller size for a minimalistic button
-        exit_button.clicked.connect(self.close)  # Connects to the window's close function
-        exit_button.setStyleSheet("""
-            QPushButton {
-                font-size: 18pt;
+        exit_button.setFixedSize(exit_button_size, exit_button_size)
+        exit_button.clicked.connect(self.close)
+        exit_button.setStyleSheet(f"""
+            QPushButton {{
+                font-size: {int(exit_button_size * 0.4)}pt;
                 color: #FFFFFF;
                 border: 2px solid #555;
                 background-color: #333;
-                border-radius: 15px;
-            }
-            QPushButton:hover {
+                border-radius: {exit_button_size // 2}px;
+            }}
+            QPushButton:hover {{
                 background-color: #555;
-            }
-            QPushButton:pressed {
+            }}
+            QPushButton:pressed {{
                 background-color: #777;
-            }
+            }}
         """)
-        button_layout.addWidget(exit_button)
 
+        # Layout for the exit button, positioned to be visually separated
+        exit_layout = QHBoxLayout()
+        exit_layout.addWidget(exit_button)
+        exit_layout.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        main_layout.addLayout(exit_layout)
+
+
+    
     def startRecording(self):
         open('gazeData.txt', 'w').close()
-        self.recording_process = subprocess.Popen(["C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/Tobii_api_test1", str(self.winId().__int__())])
+        self.recording_process = subprocess.Popen(["C:/Users/Nazli/Desktop/DyslexiaProject-main/Release/Tobii_api_test1", str(self.winId()._int_())])
 
     def stopRecording(self):
         if self.recording_process:
             self.recording_process.terminate()
+            # Process gaze data to calculate dwell times
+            #self.processGazeData()
+
+    """def processGazeData(self):
+        with open('gazeData.txt', 'r') as file:
+            gaze_data = file.readlines()
+        self.dwell_data = calculate_dwell_times(gaze_data)"""
+
 
     def showHeatmapOnText(self):
         gaze_points = []
@@ -255,6 +358,17 @@ class GazeVisualizer(QMainWindow):
             self.heatmap_overlay.update()  # Explicitly request an update
         else:
             print("No gaze points parsed or heatmap overlay not properly set up.")
+
+    """def showHeatmapOnText(self):
+        # Check if dwell_data is available and has data
+        if self.dwell_data and len(self.dwell_data) > 0:
+            # Pass the dwell data directly to HeatmapOverlay
+            self.heatmap_overlay = HeatmapOverlay(self.dwell_data, self)
+            self.heatmap_overlay.setGeometry(0, 0, self.width(), self.height())
+            self.heatmap_overlay.show()
+            self.heatmap_overlay.update()  # Explicitly request an update
+        else:
+            print("No dwell data available or heatmap overlay not properly set up.")"""
 
     # Update startPlayback function similarly to handle timestamp and gaze points
     def startPlayback(self):
