@@ -25,7 +25,7 @@ def calculate_dwell_times(gaze_data):
 
         if last_point is not None:
             time_diff = (timestamp - last_timestamp).total_seconds()
-            distance = ((gaze_point[0] - last_point[0]) * 2 + (gaze_point[1] - last_point[1]) * 2) ** 0.5
+            distance = ((gaze_point[0] - last_point[0]) ** 2 + (gaze_point[1] - last_point[1]) ** 2) ** 0.5
             # Check if the gaze is still within a fixation (this threshold may need to be adjusted)
             if distance < 0.1 and time_diff < 1:
                 accumulated_time += time_diff
@@ -43,6 +43,26 @@ def calculate_dwell_times(gaze_data):
 
     return dwell_data
 
+## NEWWWW
+def parse_word_hit_counts(file_path):
+    word_hit_data = []
+    with open(file_path, 'r') as file:
+        for line in file:
+            # Assuming the file format is consistent with your example
+            parts = line.strip().split(' - ')
+            identifier, count_str = parts[0], parts[1]
+            timestamps_str = parts[3] if len(parts) > 3 else ""
+            # Extracting coordinates from the identifier
+            coords = tuple(map(float, identifier.split('-')))
+            count = int(count_str.split(': ')[1])
+            timestamps = timestamps_str.split(', ')
+            word_hit_data.append({
+                'coords': coords,
+                'count': count,
+                'timestamps': timestamps
+            })
+    return word_hit_data
+
 # Example usage
 gaze_data_example = [
     "[2024-03-25 12:59:56.961] Gaze point: [-0.615992, 0.437235]",
@@ -50,10 +70,9 @@ gaze_data_example = [
 ]
 dwell_data = calculate_dwell_times(gaze_data_example)
 
-
 class Overlay(QWidget):
-    def _init_(self, parent=None):
-        super()._init_(parent)
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.setAttributes()
 
     def setAttributes(self):
@@ -62,18 +81,19 @@ class Overlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
 class HeatmapOverlay(Overlay):
-    def _init_(self, gaze_points, parent=None):
-        super()._init_(parent)
+    def __init__(self, gaze_points, word_hit_data, parent=None):
+        super().__init__(parent)
         self.gaze_points = gaze_points
+        self.word_hit_data = word_hit_data
         # Dynamically adjust the number of bins based on the screen size
-        self.bins = max(min(parent.width(), parent.height()) // 100, 10)  # Example dynamic calculation
+        self.bins = max(min(parent.width(), parent.height()) // 100, 10)
 
     def paintEvent(self, event):
         qp = QPainter(self)
         qp.setRenderHint(QPainter.Antialiasing)
 
+        # Drawing the heatmap based on gaze points
         gaze_points_xy = [(point[0], point[1]) for point in self.gaze_points]
-        # Use self.bins for the bins parameter to make it dynamic
         heatmap, xedges, yedges = np.histogram2d(*zip(*gaze_points_xy), bins=(self.bins, self.bins))
         heatmap /= np.max(heatmap)  # Normalize
 
@@ -85,12 +105,32 @@ class HeatmapOverlay(Overlay):
                 qp.setPen(Qt.NoPen)
                 qp.drawRect(QRect(int(xedges[i]), int(yedges[j]), int(xedges[i+1] - xedges[i]), int(yedges[j+1] - yedges[j])))
 
+        # Ensure the text is visible by setting a contrasting color
+        qp.setPen(QColor(0, 0, 0))  # Black color  # White color for visibility
+        font = QFont('Arial', 10)  # Larger font size for visibility
+        qp.setFont(font)
 
+        # Debug: Draw a fixed piece of text to ensure drawing works
+        qp.drawText(10, 20, "Test Timestamp")
 
+        for word_data in self.word_hit_data:
+            if word_data['count'] > 1:
+                # Make sure coordinates are correctly mapped
+                x, y = self.adjust_coordinates(word_data['coords'])
+                timestamp_summary = self.generate_timestamp_summary(word_data['timestamps'])
+                qp.drawText(x, y, timestamp_summary)
+
+    def adjust_coordinates(self, coords):
+        screen_x, screen_y = coords
+        return screen_x, screen_y  # Return adjusted coordinates
+
+    def generate_timestamp_summary(self, timestamps):
+        # Logic to generate a summary string from timestamps
+        return f"Count: {len(timestamps)}"
 
 class GazeOverlay(Overlay):
-    def _init_(self, parent=None):
-        super()._init_(parent)
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.gaze_x, self.gaze_y = 0, 0
         # Calculate the base circle radius dynamically based on the parent size
         # The factor (e.g., 0.06 for 6%) determines the size of the pointer relative to the window
@@ -106,9 +146,11 @@ class GazeOverlay(Overlay):
         qp.setRenderHint(QPainter.Antialiasing)
         qp.setBrush(QColor(255, 165, 0, 128))  # Semi-transparent orange
         qp.setPen(Qt.NoPen)
-        # Use self.base_circle_radius directly in drawing the ellipse
-        qp.drawEllipse(self.gaze_x - self.base_circle_radius, self.gaze_y - self.base_circle_radius,
-                       2 * self.base_circle_radius, 2 * self.base_circle_radius)
+        # Ensure x, y, and base_circle_radius are treated as integers
+        x = int(self.gaze_x - self.base_circle_radius)
+        y = int(self.gaze_y - self.base_circle_radius)
+        diameter = int(2 * self.base_circle_radius)  # Diameter needs to be an integer as well
+        qp.drawEllipse(x, y, diameter, diameter)
 
     def update_gaze_position(self, x, y):
         self.gaze_x, self.gaze_y = x, y
@@ -120,8 +162,8 @@ class GazeOverlay(Overlay):
 class GazeDataProcessor(QThread):
     update_gaze_signal = pyqtSignal(datetime, int, int)
 
-    def _init_(self, gaze_data, screen_width, screen_height, word_labels):
-        super()._init_()
+    def __init__(self, gaze_data, screen_width, screen_height, word_labels):
+        super().__init__()
         self.gaze_data = gaze_data
         self.screen_width = screen_width
         self.screen_height = screen_height
@@ -137,27 +179,37 @@ class GazeDataProcessor(QThread):
             gaze_point = [float(val) for val in gaze_str.strip()[1:-1].split(',')]
             screen_x, screen_y = normalize_gaze_to_screen(gaze_point, self.screen_width, self.screen_height)
 
-            # Iterate over word labels
             for identifier, label_obj, word in self.word_labels:
                 if label_obj.geometry().contains(screen_x, screen_y):
                     key = (identifier, word)
+                    # Ensure the word hit entry includes screen coordinates
+                    if key not in self.word_hits:
+                        self.word_hits[key] = {'count': 0, 'timestamps': [], 'coords': (screen_x, screen_y)}
+                    else:
+                        self.word_hits[key]['coords'] = (screen_x, screen_y)  # Always update to the latest coordinates
                     self.word_hits[key]['count'] += 1
                     self.word_hits[key]['timestamps'].append(timestamp.strftime("%Y-%m-%d %H:%M:%S.%f"))
 
             self.update_gaze_signal.emit(timestamp, screen_x, screen_y)
-            time.sleep(0.02)  # Adjust as needed
-
-    def write_hit_counts_to_file(self, filename='word_hit_counts.txt'):
+            time.sleep(0.02)
+            
+def write_hit_counts_to_file(self, filename='word_hit_counts.txt'):
         with open(filename, 'w') as file:
             for (identifier, word), data in self.word_hits.items():
                 timestamps_str = ', '.join(data['timestamps'])
-                # Write both the identifier and word text
-                file.write(f"{identifier} - {word}: {data['count']} - Timestamps: {timestamps_str}\n")
+                # Assume each word hit data now includes the last known screen coordinates
+                # It might require you to update the self.word_hits[key] structure elsewhere to include these coordinates.
+                # For example, self.word_hits[key] could be updated to include 'coords': (screen_x, screen_y) when the hit is registered
+                if 'coords' in data:
+                    coords = data['coords']  # This would be a tuple like (screen_x, screen_y)
+                    file.write(f"{identifier} - {word}: {data['count']} - Coords: {coords[0]}, {coords[1]} - Timestamps: {timestamps_str}\n")
+                else:
+                    file.write(f"{identifier} - {word}: {data['count']} - Timestamps: {timestamps_str}\n")
 
 
 class GazeVisualizer(QMainWindow):
-    def _init_(self, screen_width, screen_height):
-        super()._init_()
+    def __init__(self, screen_width, screen_height):
+        super().__init__()
         self.screen_width, self.screen_height = screen_width, screen_height
         self.dwell_data = None
         self.setupUI()
@@ -175,7 +227,7 @@ class GazeVisualizer(QMainWindow):
         self.gaze_overlay.setGeometry(0, 0, self.screen_width, self.screen_height)
 
     def setupLabels(self):
-        text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum."
+        text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop..."
 
         # Base font size and scaling factor
         base_font_size = 12  # Base size for calculation
@@ -217,11 +269,7 @@ class GazeVisualizer(QMainWindow):
             x += word_width  # Move x for the next word
 
         # Center the text block vertically if it doesn't fill the screen
-        """total_text_height = y + line_height - y_start
-        if total_text_height < self.screen_height * 0.6:  # If text block is smaller than 60% of screen height
-            extra_space = (self.screen_height * 0.6 - total_text_height) / 2
-            for identifier, label, word in self.labels:
-                label.move(label.x(), int(label.y() + extra_space))"""
+
         total_text_height = y + line_height - y_start
         if total_text_height < self.screen_height * 0.6:  # If text block is smaller than 60% of screen height
             extra_space = (self.screen_height * 0.6 - total_text_height) / 2
@@ -247,7 +295,8 @@ class GazeVisualizer(QMainWindow):
         main_layout.setContentsMargins(layout_spacing, layout_spacing, layout_spacing, layout_spacing)
 
         # Calculate the spacer size to push buttons down based on the total text height
-        spacer_height = max(self.screen_height * 0.05, self.total_text_height + self.screen_height * 0.05 - self.screen_height * 0.5)
+        # Explicitly converting spacer_height to an integer
+        spacer_height = int(max(self.screen_height * 0.05, self.total_text_height + self.screen_height * 0.05 - self.screen_height * 0.5))
         spacer = QSpacerItem(20, spacer_height, QSizePolicy.Minimum, QSizePolicy.Expanding)
         main_layout.addItem(spacer)
 
@@ -319,23 +368,15 @@ class GazeVisualizer(QMainWindow):
         exit_layout.setAlignment(Qt.AlignRight | Qt.AlignTop)
         main_layout.addLayout(exit_layout)
 
-
-    
     def startRecording(self):
         open('gazeData.txt', 'w').close()
-        self.recording_process = subprocess.Popen(["C:/Users/Nazli/Desktop/DyslexiaProject-main/Release/Tobii_api_test1", str(self.winId()._int_())])
+        self.recording_process = subprocess.Popen(["C:/Users/Nazli/Desktop/DyslexiaProject-main/Release/Tobii_api_test1", str(self.winId().__int__())])
 
     def stopRecording(self):
         if self.recording_process:
             self.recording_process.terminate()
             # Process gaze data to calculate dwell times
             #self.processGazeData()
-
-    """def processGazeData(self):
-        with open('gazeData.txt', 'r') as file:
-            gaze_data = file.readlines()
-        self.dwell_data = calculate_dwell_times(gaze_data)"""
-
 
     def showHeatmapOnText(self):
         gaze_points = []
@@ -350,25 +391,17 @@ class GazeVisualizer(QMainWindow):
 
         # Debugging: Print the number of parsed gaze points
         print(f"Number of parsed gaze points: {len(gaze_points)}")
+        word_hit_file_path = "C:\\Users\\Nazli\\Desktop\\DyslexiaProject-main\\Release\\word_hit_counts.txt"
+        word_hit_data = parse_word_hit_counts(word_hit_file_path)
 
         if len(gaze_points) > 0:
-            self.heatmap_overlay = HeatmapOverlay(gaze_points, self)
+            #self.heatmap_overlay = HeatmapOverlay(gaze_points, self)
+            self.heatmap_overlay = HeatmapOverlay(gaze_points, word_hit_data, self)
             self.heatmap_overlay.setGeometry(0, 0, self.width(), self.height())
             self.heatmap_overlay.show()
             self.heatmap_overlay.update()  # Explicitly request an update
         else:
             print("No gaze points parsed or heatmap overlay not properly set up.")
-
-    """def showHeatmapOnText(self):
-        # Check if dwell_data is available and has data
-        if self.dwell_data and len(self.dwell_data) > 0:
-            # Pass the dwell data directly to HeatmapOverlay
-            self.heatmap_overlay = HeatmapOverlay(self.dwell_data, self)
-            self.heatmap_overlay.setGeometry(0, 0, self.width(), self.height())
-            self.heatmap_overlay.show()
-            self.heatmap_overlay.update()  # Explicitly request an update
-        else:
-            print("No dwell data available or heatmap overlay not properly set up.")"""
 
     # Update startPlayback function similarly to handle timestamp and gaze points
     def startPlayback(self):
