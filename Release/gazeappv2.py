@@ -1,14 +1,67 @@
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QSpacerItem, QSizePolicy
-from PyQt5.QtGui import QPainter, QColor, QFont, QFontMetrics
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
+from PyQt5.QtGui import QPainter, QColor, QFont, QFontMetrics, QPen
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint
 import sys, time, subprocess, datetime, numpy as np
 from datetime import datetime
 
+class CalibrationScreen(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(parent.size())  # Same size as the parent
+        self.dots = [
+            (0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.9, 0.9),
+            (0.5, 0.1), (0.5, 0.9), (0.5, 0.5)
+        ]
+        self.current_dot = 0
+        self.parent = parent
+        self.initUI()
+
+    def initUI(self):
+        self.next_button = QPushButton("Next", self)
+        self.next_button.clicked.connect(self.nextDot)
+        self.next_button.setGeometry(self.width() - 100, self.height() - 50, 80, 30)
+        self.show()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.parent.hideUI()  # Hide other UI elements
+
+    def closeEvent(self, event):
+        super().closeEvent(event)
+        self.parent.showUI()  # Restore UI elements
+
+    def nextDot(self):
+        if self.current_dot > 0:
+            self.parent.stopRecording()
+        if self.current_dot < len(self.dots):
+            self.parent.startCalibrationRecording(self.current_dot)
+            self.current_dot += 1
+            if self.current_dot == len(self.dots):
+                self.next_button.setText("Finish")
+        else:
+            self.close()
+
+        self.update()
+
+    def paintEvent(self, event):
+        qp = QPainter(self)
+        qp.setPen(QPen(QColor(255, 0, 0), 10))
+        dot_x = int(self.width() * self.dots[self.current_dot - 1][0])
+        dot_y = int(self.height() * self.dots[self.current_dot - 1][1])
+        qp.drawPoint(QPoint(dot_x, dot_y))
+
+
 def normalize_gaze_to_screen(gaze_point, screen_width, screen_height):
-    y_offset = 180  # Adjust this value as needed to correct the offset
     x, y = gaze_point
-    screen_x = int((x + 1) / 2 * screen_width)
-    screen_y = int((1 - y) / 2 * screen_height) + y_offset  # Subtract the offset here
+
+    # Adjust the scale factor if values exceed [-1, 1]
+    x_scale = max(abs(x), 1)
+    y_scale = max(abs(y), 1)
+
+    # Normalize x and y to screen coordinates, adjusting for any over-bound values
+    screen_x = int(((x / x_scale) + 1) / 2 * screen_width)
+    screen_y = int((1 - (y / y_scale)) / 2 * screen_height)
+
     return screen_x, screen_y
 
 # Convert string timestamps to datetime objects and calculate dwell times
@@ -193,7 +246,7 @@ class GazeDataProcessor(QThread):
             self.update_gaze_signal.emit(timestamp, screen_x, screen_y)
             time.sleep(0.02)
             
-def write_hit_counts_to_file(self, filename='word_hit_counts.txt'):
+    def write_hit_counts_to_file(self, filename='word_hit_counts.txt'):
         with open(filename, 'w') as file:
             for (identifier, word), data in self.word_hits.items():
                 timestamps_str = ', '.join(data['timestamps'])
@@ -218,13 +271,23 @@ class GazeVisualizer(QMainWindow):
         self.setGeometry(100, 100, self.screen_width, self.screen_height)
         self.setWindowTitle('Gaze Tracker')
         logical_dpi_x = QApplication.screens()[0].logicalDotsPerInchX()
-        # Scale factor based on standard DPI (96 is often used as the standard DPI)
         self.dpi_scale_factor = logical_dpi_x / 96
-        # Now call setupLabels and setupButtons which will use this scale factor
         self.setupLabels()
         self.setupButtons()
         self.gaze_overlay = GazeOverlay(self)
         self.gaze_overlay.setGeometry(0, 0, self.screen_width, self.screen_height)
+
+    def hideUI(self):
+        # Hide elements like labels and other buttons
+        for label in self.labels:
+            label[1].hide()  # Assuming label[1] is the QLabel object
+        self.gaze_overlay.hide()
+
+    def showUI(self):
+        # Show all previously hidden elements
+        for label in self.labels:
+            label[1].show()
+        self.gaze_overlay.show()
 
     def setupLabels(self):
         text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop..."
@@ -294,8 +357,6 @@ class GazeVisualizer(QMainWindow):
         main_layout.setSpacing(layout_spacing)
         main_layout.setContentsMargins(layout_spacing, layout_spacing, layout_spacing, layout_spacing)
 
-        # Calculate the spacer size to push buttons down based on the total text height
-        # Explicitly converting spacer_height to an integer
         spacer_height = int(max(self.screen_height * 0.05, self.total_text_height + self.screen_height * 0.05 - self.screen_height * 0.5))
         spacer = QSpacerItem(20, spacer_height, QSizePolicy.Minimum, QSizePolicy.Expanding)
         main_layout.addItem(spacer)
@@ -307,6 +368,7 @@ class GazeVisualizer(QMainWindow):
             (self.stopPlayback, 'Stop Playback'),
             (self.showHeatmapOnText, 'Project Heatmap'),
             (self.stopRecording, 'Stop Recording'),
+            (self.startCalibration, 'Calibrate')
         ]
 
         for func, name in functions:
@@ -368,15 +430,37 @@ class GazeVisualizer(QMainWindow):
         exit_layout.setAlignment(Qt.AlignRight | Qt.AlignTop)
         main_layout.addLayout(exit_layout)
 
+    def startCalibration(self):
+        self.calibration_screen = CalibrationScreen(self)
+        self.calibration_screen.show()
+
     def startRecording(self):
-        open('gazeData.txt', 'w').close()
-        self.recording_process = subprocess.Popen(["C:/Users/Nazli/Desktop/DyslexiaProject-main/Release/Tobii_api_test1", str(self.winId().__int__())])
+        # General recording to a default file, not specific to calibration
+        default_filename = 'gazeData.txt'
+        open(default_filename, 'w').close()  # Ensures the file is empty before starting to record
+        executable_path = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/Tobii_api_test1"
+        window_id = str(self.winId().__int__())  # Convert window handle to string
+        # Now include the default filename in the command
+        cmd = [executable_path, window_id, default_filename]
+        self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"Starting general recording with command: {cmd}")  # Optional: Debugging output
+
+    def startCalibrationRecording(self, dot_id):
+        # Calibration recording to a specific file based on the dot ID
+        filename = f'gazeData_{dot_id}.txt'
+        open(filename, 'w').close()  # Ensures the file is empty before starting to record
+        executable_path = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/Tobii_api_test1"
+        window_id = str(self.winId().__int__())
+        # Include the specific filename for this dot in the command
+        cmd = [executable_path, window_id, filename]
+        self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"Starting calibration recording for dot {dot_id} with command: {cmd}")
 
     def stopRecording(self):
         if self.recording_process:
             self.recording_process.terminate()
-            # Process gaze data to calculate dwell times
-            #self.processGazeData()
+            self.recording_process = None
+            print("Recording stopped.")  # Optional: Confirmation message for stopping the recording
 
     def showHeatmapOnText(self):
         gaze_points = []
