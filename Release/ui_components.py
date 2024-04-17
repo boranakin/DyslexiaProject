@@ -1,4 +1,5 @@
 # ui_components.py
+
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QSpacerItem, QSizePolicy
 from PyQt5.QtGui import QPainter, QColor, QFont, QFontMetrics, QPen
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint
@@ -7,63 +8,70 @@ from datetime import datetime
 from overlays import GazeOverlay, HeatmapOverlay
 from data_handling import normalize_gaze_to_screen, parse_word_hit_counts, GazeDataProcessor
 from calibration import CalibrationScreen
+from ui_styles import get_button_style, get_exit_button_style, get_label_style, get_text_content, get_theme 
 
 class GazeVisualizer(QMainWindow):
+
     def __init__(self, screen_width, screen_height):
         super().__init__()
         self.screen_width, self.screen_height = screen_width, screen_height
+        self.is_night_mode = False  # Track whether night mode is active
         self.dwell_data = None
+        self.other_buttons = []  # Store references to other buttons
         self.setupUI()
+    
+    def toggle_night_mode(self):
+        # Toggle the night mode state and update the stylesheet
+        new_mode = "night_mode" if not self.is_night_mode else "default"
+        self.setStyleSheet(get_theme(new_mode))
+        self.is_night_mode = not self.is_night_mode
 
     def setupUI(self):
         self.setGeometry(100, 100, self.screen_width, self.screen_height)
         self.setWindowTitle('Gaze Tracker')
         logical_dpi_x = QApplication.screens()[0].logicalDotsPerInchX()
         self.dpi_scale_factor = logical_dpi_x / 96
+        self.setStyleSheet(get_theme("default"))  # Start with the default theme
         self.setupLabels()
         self.setupButtons()
         self.gaze_overlay = GazeOverlay(self)
         self.gaze_overlay.setGeometry(0, 0, self.screen_width, self.screen_height)
 
-    def hideUI(self):
-        # Hide elements like labels and other buttons
+    def hideUICalibration(self):
+        # Hide all non-essential UI elements except 'Next' and 'Exit'
+        self.night_mode_button.hide()
         for label in self.labels:
-            label[1].hide()  # Assuming label[1] is the QLabel object
+            label[1].hide()
         self.gaze_overlay.hide()
+        for button in self.other_buttons:
+            button.hide()
+        self.exit_button.hide()  # Also hide the exit button during calibration
 
-    def showUI(self):
-        # Show all previously hidden elements
+    def showUICalibration(self):
+        # Restore all UI elements after calibration
+        self.night_mode_button.show()
         for label in self.labels:
             label[1].show()
         self.gaze_overlay.show()
+        for button in self.other_buttons:
+            button.show()
+        self.exit_button.show()  # Show the exit button again
 
     def setupLabels(self):
-        text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop..."
-
-        # Base font size and scaling factor
-        base_font_size = 12  # Base size for calculation
-        screen_height = self.screen_height  # Use the screen height for scaling
+        text = get_text_content()
         
-        # Adjust font size based on screen height
-        font_scaling_factor = screen_height / 1080  # Assuming 1080p as base
-        # Adjust font size based on DPI scale factor
-        font_size = max(int(base_font_size * self.dpi_scale_factor), 50)
-
-        font = QFont('Calibri', font_size)
+        font_family, font_size, line_spacing_factor = get_label_style(self.screen_height)
+        font = QFont(font_family, font_size)
         fm = QFontMetrics(font)
         line_height = fm.height()
 
-        words = text.split()
         max_line_width = self.screen_width * 0.8  # Use 80% of screen width for text
-
         x_start = self.screen_width * 0.1  # Start 10% from the left
         y_start = self.screen_height * 0.2  # Start 30% from the top, adjust as needed
         x, y = x_start, y_start
 
         self.labels = []  # This will store tuples of (identifier, QLabel object, word text)
-        line_spacing_factor = 1.5  # Adjust this factor to increase line spacing, 1.5 means 150% of line height
-
-        for word in words:
+        for word in text.split():
             word_width = fm.width(word + ' ')  # Include space in width calculation
             if x + word_width > self.screen_width - x_start:  # Check if the word exceeds the max line width
                 x = x_start  # Reset x to start of line
@@ -79,8 +87,7 @@ class GazeVisualizer(QMainWindow):
 
             x += word_width  # Move x for the next word
 
-        # Center the text block vertically if it doesn't fill the screen
-
+        # Adjust vertical position if necessary
         total_text_height = y + line_height - y_start
         if total_text_height < self.screen_height * 0.6:  # If text block is smaller than 60% of screen height
             extra_space = (self.screen_height * 0.6 - total_text_height) / 2
@@ -88,27 +95,58 @@ class GazeVisualizer(QMainWindow):
             for identifier, label, word in self.labels:
                 label.move(label.x(), int(label.y() + extra_space))
 
-        # Store the total text height as an attribute for later use
         self.total_text_height = total_text_height + y_start  # Add y_start to include the initial offset
 
     def setupButtons(self):
-        # Calculate dynamic sizes and spacing based on screen dimensions
-        button_width = int(self.screen_width * 0.15 * self.dpi_scale_factor)
-        button_height = int(self.screen_height * 0.07 * self.dpi_scale_factor)
-        exit_button_size = int(self.screen_height * 0.08 * self.dpi_scale_factor)
-        layout_spacing = int(self.screen_width * 0.01)  # 1% of screen width for spacing between elements
-
-        # Central widget setup for overall layout management
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
+        layout_spacing = int(self.screen_width * 0.01)  # Dynamic spacing based on screen width
+        margins = layout_spacing  # Use the same dynamic spacing for margins
+
         main_layout = QVBoxLayout(central_widget)
         main_layout.setSpacing(layout_spacing)
-        main_layout.setContentsMargins(layout_spacing, layout_spacing, layout_spacing, layout_spacing)
+        main_layout.setContentsMargins(margins, margins, margins, margins)
 
-        spacer_height = int(max(self.screen_height * 0.05, self.total_text_height + self.screen_height * 0.05 - self.screen_height * 0.5))
+        # Setup exit button
+        exit_button_size = int(self.screen_height * 0.05 * self.dpi_scale_factor)
+        self.exit_button = QPushButton('X', self)  # Make exit_button an attribute of the class
+        self.exit_button.setFixedSize(exit_button_size, exit_button_size)
+        self.exit_button.clicked.connect(self.close)
+        self.exit_button.setStyleSheet(get_exit_button_style(exit_button_size))
+        exit_layout = QHBoxLayout()
+        exit_layout.addWidget(self.exit_button)
+        exit_layout.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        main_layout.addLayout(exit_layout)
+
+        # Setup Night Mode Button
+        # Make the button a third of the size of other buttons
+        button_width = int(self.screen_width * 0.045 * self.dpi_scale_factor)  # 1/3 width of other buttons
+        button_height = int(self.screen_height * 0.029 * self.dpi_scale_factor)  # 1/3 height of other buttons
+        self.night_mode_button = QPushButton('Nightmode', self)
+        self.night_mode_button.setFixedSize(button_width, button_height)
+        self.night_mode_button.clicked.connect(self.toggle_night_mode)
+        self.night_mode_button.setStyleSheet(get_button_style(button_height))
+
+        # Align the night mode button to the top left corner
+        # Calculate margins to position the button near the top left corner with some spacing
+        top_margin = int(self.screen_height * 0.01)  # Smaller margin from the top edge
+        right_margin = int(self.screen_width * 0.01)  # Smaller margin from the left edge
+
+        night_mode_layout = QHBoxLayout()
+        night_mode_layout.addWidget(self.night_mode_button)
+        night_mode_layout.setContentsMargins(right_margin, top_margin, 0, 0)  # Set margins
+        night_mode_layout.setAlignment(Qt.AlignTop | Qt.AlignRight)  # Align to top left
+        main_layout.addLayout(night_mode_layout)
+
+        # Dynamic spacer to move buttons up
+        spacer_proportion = 0.3  # Adjust this value to change the vertical position of the buttons
+        spacer_height = int(self.screen_height * spacer_proportion)
         spacer = QSpacerItem(20, spacer_height, QSizePolicy.Minimum, QSizePolicy.Expanding)
         main_layout.addItem(spacer)
 
+        # Setup other buttons
+        button_width = int(self.screen_width * 0.12 * self.dpi_scale_factor)
+        button_height = int(self.screen_height * 0.06 * self.dpi_scale_factor)
         button_layout = QHBoxLayout()
         functions = [
             (self.startPlayback, 'Playback'),
@@ -118,66 +156,17 @@ class GazeVisualizer(QMainWindow):
             (self.stopRecording, 'Stop Recording'),
             (self.startCalibration, 'Calibrate')
         ]
-
+        self.other_buttons = []  # Define a list to manage other buttons
         for func, name in functions:
-            button = QPushButton(name)
+            button = QPushButton(name, self)
             button.clicked.connect(func)
-            button.setFixedSize(button_width, button_height)  # Keep dynamic sizing
-            # Apply the dynamic visual styling with gradient effects here
-            button.setStyleSheet(f"""
-                QPushButton {{
-                    font-size: {int(button_height * 0.15)}pt;
-                    color: white;
-                    border-radius: {button_height // 2}px;
-                    background-color: qlineargradient(
-                        spread:pad, x1:0, y1:0.5, x2:1, y2:0.5,
-                        stop:0 rgba(126, 87, 194, 1), stop:1 rgba(149, 117, 205, 1));
-                    border: 1px solid #DBDBDB;
-                    padding: 5px;
-                }}
-                QPushButton:hover {{
-                    background-color: qlineargradient(
-                        spread:pad, x1:0, y1:0.5, x2:1, y2:0.5,
-                        stop:0 rgba(255, 151, 60, 1), stop:1 rgba(255, 193, 7, 1));
-                }}
-                QPushButton:pressed {{
-                    background-color: qlineargradient(
-                        spread:pad, x1:0, y1:0.5, x2:1, y2:0.5,
-                        stop:0 rgba(221, 44, 0, 1), stop:1 rgba(255, 109, 0, 1));
-                }}
-            """)
+            button.setFixedSize(button_width, button_height)
+            button.setStyleSheet(get_button_style(button_height))
             button_layout.addWidget(button)
+            self.other_buttons.append(button)  # Add to the list for easy management
 
-        main_layout.addLayout(button_layout)
-
-        # Your existing setup for the "Exit" button...
-
-        # Customize the "Exit" button with dynamic styling and sizing
-        exit_button = QPushButton('X')
-        exit_button.setFixedSize(exit_button_size, exit_button_size)
-        exit_button.clicked.connect(self.close)
-        exit_button.setStyleSheet(f"""
-            QPushButton {{
-                font-size: {int(exit_button_size * 0.4)}pt;
-                color: #FFFFFF;
-                border: 2px solid #555;
-                background-color: #333;
-                border-radius: {exit_button_size // 2}px;
-            }}
-            QPushButton:hover {{
-                background-color: #555;
-            }}
-            QPushButton:pressed {{
-                background-color: #777;
-            }}
-        """)
-
-        # Layout for the exit button, positioned to be visually separated
-        exit_layout = QHBoxLayout()
-        exit_layout.addWidget(exit_button)
-        exit_layout.setAlignment(Qt.AlignRight | Qt.AlignTop)
-        main_layout.addLayout(exit_layout)
-
+        main_layout.addLayout(button_layout)  # Add the layout containing all buttons
+    
     def startCalibration(self):
         self.calibration_screen = CalibrationScreen(self)
         self.calibration_screen.show()
@@ -248,10 +237,9 @@ class GazeVisualizer(QMainWindow):
         else:
             print("No gaze points parsed or heatmap overlay not properly set up.")
 
-    # Update startPlayback function similarly to handle timestamp and gaze points
     def startPlayback(self):
         folder_path = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data"
-        filename1 = 'gazeData.txt'
+        filename1 = 'gazeData_calibrated.txt'
         file_path3 = os.path.join(folder_path, filename1)
 
         gaze_data = []
@@ -262,7 +250,6 @@ class GazeVisualizer(QMainWindow):
         self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels)
         self.gaze_processor.update_gaze_signal.connect(lambda ts, x, y: self.gaze_overlay.update_gaze_position(x, y))
         self.gaze_processor.start()
-
 
     def stopPlayback(self):
         if self.gaze_processor and self.gaze_processor.isRunning():

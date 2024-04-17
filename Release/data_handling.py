@@ -1,21 +1,28 @@
-from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QSpacerItem, QSizePolicy
-from PyQt5.QtGui import QPainter, QColor, QFont, QFontMetrics, QPen
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint
-import sys, time, subprocess, datetime, numpy as np
+# data_handling.py
+import sys, time
 from datetime import datetime
+from PyQt5.QtCore import QThread, pyqtSignal
 
 def normalize_gaze_to_screen(gaze_point, screen_width, screen_height):
     x, y = gaze_point
-
-    # Adjust the scale factor if values exceed [-1, 1]
     x_scale = max(abs(x), 1)
     y_scale = max(abs(y), 1)
-
-    # Normalize x and y to screen coordinates, adjusting for any over-bound values
     screen_x = int(((x / x_scale) + 1) / 2 * screen_width)
     screen_y = int((1 - (y / y_scale)) / 2 * screen_height)
-
     return screen_x, screen_y
+
+def parse_word_hit_counts(file_path):
+    word_hit_data = []
+    with open(file_path, 'r') as file:
+        for line in file:
+            parts = line.strip().split(' - ')
+            identifier, count_str = parts[0], parts[1]
+            timestamps_str = parts[3] if len(parts) > 3 else ""
+            coords = tuple(map(float, identifier.split('-')))
+            count = int(count_str.split(': ')[1])
+            timestamps = timestamps_str.split(', ')
+            word_hit_data.append({'coords': coords, 'count': count, 'timestamps': timestamps})
+    return word_hit_data
 
 class GazeDataProcessor(QThread):
     update_gaze_signal = pyqtSignal(datetime, int, int)
@@ -95,26 +102,6 @@ def calculate_dwell_times(gaze_data):
         dwell_data.append((last_timestamp, last_point[0], last_point[1], accumulated_time))
 
     return dwell_data
-
-## NEWWWW
-def parse_word_hit_counts(file_path):
-    word_hit_data = []
-    with open(file_path, 'r') as file:
-        for line in file:
-            # Assuming the file format is consistent with your example
-            parts = line.strip().split(' - ')
-            identifier, count_str = parts[0], parts[1]
-            timestamps_str = parts[3] if len(parts) > 3 else ""
-            # Extracting coordinates from the identifier
-            coords = tuple(map(float, identifier.split('-')))
-            count = int(count_str.split(': ')[1])
-            timestamps = timestamps_str.split(', ')
-            word_hit_data.append({
-                'coords': coords,
-                'count': count,
-                'timestamps': timestamps
-            })
-    return word_hit_data
 
 # Example usage
 gaze_data_example = [

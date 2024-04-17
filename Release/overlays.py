@@ -22,7 +22,7 @@ class HeatmapOverlay(Overlay):
         super().__init__(parent)
         self.gaze_points = gaze_points
         self.word_hit_data = word_hit_data
-        self.bins = max(min(parent.width(), parent.height()) // 100, 10)
+        self.bins = max(min(parent.width(), parent.height()) // 50, 10)
 
     def paintEvent(self, event):
         qp = QPainter(self)
