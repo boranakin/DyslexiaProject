@@ -1,8 +1,15 @@
 import os
-import numpy as np
 from PyQt5.QtWidgets import QWidget, QPushButton, QHBoxLayout
 from PyQt5.QtGui import QPainter, QColor, QPen
 from PyQt5.QtCore import QPoint, Qt
+
+import numpy as np
+import sklearn
+import joblib
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import make_pipeline
+
 from ui_styles import get_button_style, get_exit_button_style
 
 class CalibrationScreen(QWidget):
@@ -11,8 +18,11 @@ class CalibrationScreen(QWidget):
         super().__init__(parent)
         self.setFixedSize(parent.size())  # Match the parent size
         self.dots = [
-            (-0.8, -0.8), (0.8, -0.8), (-0.8, 0.8), (0.8, 0.8),
-            (0.0, -0.8), (0.0, 0.8), (0.0, 0.0)
+            (-0.6, -0.5), (0.6, -0.5), (-0.6, 0.5), (0.6, 0.5),
+            (0.0, -0.5), (0.0, 0.5), (0.0, 0.0),
+            (-0.6, 0.0), (0.6, 0.0),
+            (-0.6, -0.25), (0.6, -0.25), (-0.6, 0.25), (0.6, 0.25),
+            (-0.3, -0.25), (0.3, -0.25), (-0.3, 0.25), (0.3, 0.25)  # New dots added in the middle at 0.3 and -0.3
         ]
 
         self.current_dot = 0
@@ -108,7 +118,9 @@ class CalibrationScreen(QWidget):
         #file_path = f'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_{index}.txt'
 
     def analyzeCalibrationData(self):
-        results_path = f'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/calibration_results.txt'
+        results_path = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/calibration_results.txt'
+        measured_points = []
+        expected_points = []
         try:
             with open(results_path, 'w') as result_file:
                 result_file.write("Calibration Results:\n")
@@ -118,14 +130,29 @@ class CalibrationScreen(QWidget):
                     if os.path.exists(file_path):
                         gaze_points = self.read_gaze_data(file_path)
                         average_gaze_point = self.calculate_average_gaze_point(gaze_points, expected)
-                        distance = self.calculate_distance(average_gaze_point, expected)
-                        result_file.write(f"{index}, {expected}, {average_gaze_point}, {distance:.2f}\n")
+                        if average_gaze_point != (None, None):
+                            measured_points.append(average_gaze_point)
+                            expected_points.append(expected)
+                            distance = self.calculate_distance(average_gaze_point, expected)
+                            result_file.write(f"{index}, {expected}, {average_gaze_point}, {distance:.2f}\n")
                     else:
                         print(f"File not found: {file_path}")
-            self.compute_affine_matrix()
-            print("Affine matrix computed and saved.")
+
+            # Fit the polynomial regression model and preprocess gaze data
+            if measured_points and expected_points:
+                self.fit_polynomial_regression(np.array(measured_points), np.array(expected_points))
+                print("Polynomial regression model computed and saved.")
+                # Call preprocess data method after the model is saved
+                original_file = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData.txt'
+                transformed_file = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_calibrated.txt'
+                self.preprocess_gaze_data(original_file, transformed_file)
         except Exception as e:
             print(f"Error during calibration data analysis: {e}")
+
+    def fit_polynomial_regression(self, measured_points, expected_points, degree=2):
+        model = make_pipeline(PolynomialFeatures(degree), LinearRegression())
+        model.fit(measured_points, expected_points)
+        joblib.dump(model, 'polynomial_regression_model.pkl')  # Save the model to disk
 
     def read_gaze_data(self, file_path):
         gaze_points = []
@@ -153,56 +180,15 @@ class CalibrationScreen(QWidget):
         if not measured or None in measured:  # Check if measured is None or contains None
             return float('inf')  # Return 'infinite' distance to indicate no valid measurement
         return ((measured[0] - expected[0])**2 + (measured[1] - expected[1])**2)**0.5
-    
-    def compute_affine_matrix(self):
-        measured_points = []
-        expected_points = []
 
-        for index, expected in enumerate(self.dots):
-            file_path = f'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_{index}.txt'
-            if os.path.exists(file_path):
-                gaze_points = self.read_gaze_data(file_path)
-                average_gaze_point = self.calculate_average_gaze_point(gaze_points, expected)
-                if average_gaze_point != (None, None):
-                    # Append [x, y, 1] for the measured points
-                    measured_points.append([*average_gaze_point, 1])
-                    # Append [x, y, 1] for the expected points to ensure 3x3 output matrix
-                    expected_points.append([*expected, 1])
-            else:
-                print(f"No data file found for index {index}")
-
-        if not measured_points:
-            print("No valid gaze points collected for affine transformation calculation.")
-            return
-
-        measured_points = np.array(measured_points)
-        expected_points = np.array(expected_points)
-
-        # Calculate the affine matrix using least squares
-        # This should create a 3x3 matrix
-        affine_matrix, residuals, rank, s = np.linalg.lstsq(measured_points, expected_points, rcond=None)
-        print(f"Residuals from the least squares computation: {residuals}")
-
-        np.save('affine_matrix.npy', affine_matrix)
-        print("Affine transformation matrix saved.")
-
-        # Now, call preprocess with the computed matrix
-        original_file = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData.txt'
-        transformed_file = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_calibrated.txt'
-        self.preprocess_gaze_data(original_file, transformed_file, affine_matrix)
-
-    def preprocess_gaze_data(self, original_file, transformed_file, affine_matrix):
+    def preprocess_gaze_data(self, original_file, transformed_file):
+        model = joblib.load('polynomial_regression_model.pkl')  # Load the model from disk
         with open(original_file, 'r') as infile, open(transformed_file, 'w') as outfile:
             for line in infile:
                 if 'Gaze point:' in line:
-                    # Split line into timestamp part and gaze point part
                     timestamp_part, gaze_part = line.split('Gaze point:')
-                    # Remove brackets and new line, then split to get coordinates
                     x, y = map(float, gaze_part.strip(' []\n').split(','))
-                    # Homogeneous coordinate vector for transformation
-                    vector = np.array([x, y, 1])
-                    # Apply the affine transformation
-                    transformed = affine_matrix @ vector
-                    # Write out the line with the original timestamp and new gaze point
+                    transformed = model.predict([[x, y]])[0]
                     outfile.write(f"{timestamp_part}Gaze point: [{transformed[0]}, {transformed[1]}]\n")
+
 
