@@ -74,11 +74,11 @@ class CalibrationScreen(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.parent.hideUICalibration()  # Hide non-essential UI elements
+        self.parent.hideUI()  # Hide non-essential UI elements
 
     def closeEvent(self, event):
         super().closeEvent(event)
-        self.parent.showUICalibration()  # Restore UI elements after calibration
+        self.parent.showUI()  # Restore UI elements after calibration
 
     def nextDot(self):
         if self.current_dot < len(self.dots):
@@ -118,8 +118,11 @@ class CalibrationScreen(QWidget):
         #file_path = f'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_{index}.txt'
 
     def analyzeCalibrationData(self):
-        #results_path = f'C:/Users/Nazli/Documents/GitHub/DyslexiaProject/Release/data/calibration_results.txt'
-        results_path = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/calibration_results.txt'
+        if not self.parent.current_user_directory:
+            print("No user directory set for calibration.")
+            return
+
+        results_path = os.path.join(self.parent.current_user_directory, 'calibration_results.txt')
         measured_points = []
         expected_points = []
         try:
@@ -127,7 +130,7 @@ class CalibrationScreen(QWidget):
                 result_file.write("Calibration Results:\n")
                 result_file.write("Dot Index, Expected (X,Y), Measured (X,Y), Distance\n")
                 for index, expected in enumerate(self.dots):
-                    file_path = f'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_{index}.txt'
+                    file_path = os.path.join(self.parent.current_user_directory, f'gazeData_{index}.txt')
                     if os.path.exists(file_path):
                         gaze_points = self.read_gaze_data(file_path)
                         average_gaze_point = self.calculate_average_gaze_point(gaze_points, expected)
@@ -139,13 +142,10 @@ class CalibrationScreen(QWidget):
                     else:
                         print(f"File not found: {file_path}")
 
-            # Fit the polynomial regression model and preprocess gaze data
             if measured_points and expected_points:
                 self.fit_polynomial_regression(np.array(measured_points), np.array(expected_points))
-                print("Polynomial regression model computed and saved.")
-                # Call preprocess data method after the model is saved
-                original_file = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData.txt'
-                transformed_file = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_calibrated.txt'
+                original_file = os.path.join(self.parent.current_user_directory, 'gazeData.txt')
+                transformed_file = os.path.join(self.parent.current_user_directory, 'gazeData_calibrated.txt')
                 self.preprocess_gaze_data(original_file, transformed_file)
         except Exception as e:
             print(f"Error during calibration data analysis: {e}")
@@ -153,7 +153,9 @@ class CalibrationScreen(QWidget):
     def fit_polynomial_regression(self, measured_points, expected_points, degree=2):
         model = make_pipeline(PolynomialFeatures(degree), LinearRegression())
         model.fit(measured_points, expected_points)
-        joblib.dump(model, 'polynomial_regression_model.pkl')  # Save the model to disk
+        model_path = os.path.join(self.parent.current_user_directory, 'polynomial_regression_model.pkl')  # Ensure model is saved in the user-specific directory
+        joblib.dump(model, model_path)  # Save the model to disk
+        print(f"Polynomial regression model saved at: {model_path}")
 
     def read_gaze_data(self, file_path):
         gaze_points = []
@@ -183,13 +185,15 @@ class CalibrationScreen(QWidget):
         return ((measured[0] - expected[0])**2 + (measured[1] - expected[1])**2)**0.5
 
     def preprocess_gaze_data(self, original_file, transformed_file):
-        model = joblib.load('polynomial_regression_model.pkl')  # Load the model from disk
-        with open(original_file, 'r') as infile, open(transformed_file, 'w') as outfile:
-            for line in infile:
-                if 'Gaze point:' in line:
-                    timestamp_part, gaze_part = line.split('Gaze point:')
-                    x, y = map(float, gaze_part.strip(' []\n').split(','))
-                    transformed = model.predict([[x, y]])[0]
-                    outfile.write(f"{timestamp_part}Gaze point: [{transformed[0]}, {transformed[1]}]\n")
-
-
+        model_path = os.path.join(self.parent.current_user_directory, 'polynomial_regression_model.pkl')
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)  # Load the model from the user-specific directory
+            with open(original_file, 'r') as infile, open(transformed_file, 'w') as outfile:
+                for line in infile:
+                    if 'Gaze point:' in line:
+                        timestamp_part, gaze_part = line.split('Gaze point:')
+                        x, y = map(float, gaze_part.strip(' []\n').split(','))
+                        transformed = model.predict([[x, y]])[0]
+                        outfile.write(f"{timestamp_part}Gaze point: [{transformed[0]}, {transformed[1]}]\n")
+        else:
+            print(f"Model file not found at {model_path}")
