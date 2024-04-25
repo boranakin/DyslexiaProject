@@ -118,6 +118,7 @@ class CalibrationScreen(QWidget):
         #file_path = f'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_{index}.txt'
 
     def analyzeCalibrationData(self):
+        #results_path = f'C:/Users/Nazli/Documents/GitHub/DyslexiaProject/Release/data/calibration_results.txt'
         results_path = 'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/calibration_results.txt'
         measured_points = []
         expected_points = []
