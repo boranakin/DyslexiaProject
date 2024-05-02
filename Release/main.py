@@ -12,3 +12,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#user verileri icin tree veri yapisi; hit countlar da userda tutulsun
+#saat tarih şeklinde recording session     
+#metni büyütme daha yukarı ve aşağı genisleme   TMM
+#toggle buttons
+#installer

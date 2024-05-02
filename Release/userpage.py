@@ -1,9 +1,8 @@
-# userpage.py
-
-import os
+import os, shutil
+from datetime import datetime
 from PyQt5.QtWidgets import QWidget, QPushButton, QVBoxLayout, QLabel, QLineEdit, QHBoxLayout, QListWidget, QListWidgetItem
-from PyQt5.QtGui import QPainter, QColor, QPen, QFont
-from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt
 
 from ui_styles import get_button_style, get_exit_button_style, get_label_style
 
@@ -11,20 +10,20 @@ class UserPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(parent.size())  # Match the parent size
-        self.parent = parent  # This will reference the GazeVisualizer instance
+        self.setFixedSize(parent.size())
+        self.parent = parent
+        self.selected_user_folder = None  # To keep track of the currently selected user directory
         self.initUI()
-        self.update_user_list()  # Populate the user list on initialization
+        self.update_user_list()
 
     def initUI(self):
-        self.setWindowTitle('User Management')
-        main_layout = QVBoxLayout()  # Main layout for the widget
-        
+        self.setWindowTitle('User and Session Management')
+        main_layout = QVBoxLayout()
         button_height = int(self.parent.screen_height * 0.06 * self.parent.dpi_scale_factor)
 
         # Top layout for title and exit button
         top_layout = QHBoxLayout()
-        self.user_list_label = QLabel("List of Users:", self)
+        self.user_list_label = QLabel("List of Users and Sessions:", self)
         font_family, font_size, _ = get_label_style(self.parent.screen_height)
         self.user_list_label.setFont(QFont(font_family, font_size))
         top_layout.addWidget(self.user_list_label, alignment=Qt.AlignLeft)
@@ -37,98 +36,160 @@ class UserPage(QWidget):
         self.exit_button.clicked.connect(self.close)
         self.exit_button.setStyleSheet(get_exit_button_style(exit_button_size))
         top_layout.addWidget(self.exit_button, alignment=Qt.AlignRight)
-
         main_layout.addLayout(top_layout)
 
+        # User and Session list widgets
         self.user_list_widget = QListWidget(self)
         self.user_list_widget.setMaximumHeight(int(self.parent.screen_height * 0.3))
-        self.user_list_widget.setMaximumWidth(int(self.parent.screen_width * 0.3))
         main_layout.addWidget(self.user_list_widget)
 
-        spacer_item = QVBoxLayout()
-        spacer_item.addStretch(1)
-        main_layout.addLayout(spacer_item)
+        self.session_list_widget = QListWidget(self)
+        self.session_list_widget.setMaximumHeight(int(self.parent.screen_height * 0.3))
+        main_layout.addWidget(self.session_list_widget)
 
-        # Bottom layout for adding new user and selecting a user
-        bottom_layout = QHBoxLayout()
-
-        self.new_user_input = QLineEdit("Enter new user name", self)
+        # Input field for new usernames/sessions
+        self.new_user_input = QLineEdit("Enter Username", self)
         self.new_user_input.setFont(QFont(font_family, font_size))
-        self.new_user_input.setFixedWidth(int(self.parent.screen_width * 0.3))
-        bottom_layout.addWidget(self.new_user_input, alignment=Qt.AlignLeft)
+        main_layout.addWidget(self.new_user_input)
 
+        # First row of management buttons
+        first_row_layout = QHBoxLayout()
         self.add_user_button = QPushButton("Add User", self)
         self.add_user_button.clicked.connect(self.add_user)
         self.add_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
         self.add_user_button.setStyleSheet(get_button_style(button_height))
-        bottom_layout.addWidget(self.add_user_button, alignment=Qt.AlignLeft)
+        first_row_layout.addWidget(self.add_user_button)
 
-        # New Select User button
-        self.select_user_button = QPushButton("Select User", self)
-        self.select_user_button.clicked.connect(self.user_selected)
-        self.select_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
-        self.select_user_button.setStyleSheet(get_button_style(button_height))
-        bottom_layout.addWidget(self.select_user_button, alignment=Qt.AlignLeft)
+        self.create_session_button = QPushButton("Create Session", self)
+        self.create_session_button.clicked.connect(self.create_session)
+        self.create_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.create_session_button.setStyleSheet(get_button_style(button_height))
+        first_row_layout.addWidget(self.create_session_button)
 
-        # Delete User button setup
+        self.select_session_button = QPushButton("Select Session", self)
+        self.select_session_button.clicked.connect(self.session_selected)
+        self.select_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.select_session_button.setStyleSheet(get_button_style(button_height))
+        first_row_layout.addWidget(self.select_session_button)
+
+        # Second row of management buttons
+        second_row_layout = QHBoxLayout()
+        self.delete_session_button = QPushButton("Delete Session", self)
+        self.delete_session_button.clicked.connect(self.delete_session)
+        self.delete_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.delete_session_button.setStyleSheet(get_button_style(button_height))
+        second_row_layout.addWidget(self.delete_session_button)
+
         self.delete_user_button = QPushButton("Delete User", self)
         self.delete_user_button.clicked.connect(self.delete_user)
         self.delete_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
         self.delete_user_button.setStyleSheet(get_button_style(button_height))
-        bottom_layout.addWidget(self.delete_user_button, alignment=Qt.AlignLeft)
+        second_row_layout.addWidget(self.delete_user_button)
 
-        main_layout.addLayout(bottom_layout)
+        self.select_user_button = QPushButton("Select User", self)
+        self.select_user_button.clicked.connect(self.user_selected)
+        self.select_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.select_user_button.setStyleSheet(get_button_style(button_height))
+        second_row_layout.addWidget(self.select_user_button)
+
+        # Add rows to main layout
+        main_layout.addLayout(first_row_layout)
+        main_layout.addLayout(second_row_layout)
         main_layout.addSpacing(int(self.parent.screen_height * 0.1))
-
         self.setLayout(main_layout)
-
-    def user_selected(self):
-        selected_item = self.user_list_widget.currentItem()
-        if selected_item:
-            selected_user = selected_item.text()
-            self.parent.setCurrentUser(selected_user)  # This should update current_user_directory as well
-            print(f"User selected: {selected_user}")
-        else:
-            print("No user selected.")
-
-    def add_user(self):
-        user_name = self.new_user_input.text().strip()
-        if user_name:
-            self.parent.setCurrentUser(user_name)  # Set and create user directory
-            self.update_user_list()  # Refresh the user list
-        else:
-            print("Please enter a valid user name.")
 
     def delete_user(self):
         selected_item = self.user_list_widget.currentItem()
         if selected_item:
-            selected_user = selected_item.text()
-            user_folder = os.path.join("C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data", f"{selected_user}_data")
+            user_name = selected_item.text()
+            user_folder = os.path.join("C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data", f"{user_name}_data")
             try:
-                # Attempt to delete the user directory
-                os.rmdir(user_folder)  # Note: os.rmdir only removes empty directories
+                shutil.rmtree(user_folder)
                 print(f"Deleted user directory: {user_folder}")
+                self.update_user_list()  # Refresh the list after deletion
+                self.update_session_list()
             except OSError as e:
                 print(f"Error deleting user directory: {e}")
-            self.update_user_list()
         else:
             print("No user selected to delete.")
 
-    def update_user_list(self):
-        self.user_list_widget.clear()  # Clear existing entries
-        data_directory = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data"
-        font_family, _, _ = get_label_style(self.parent.screen_height)  # Use same font family as the rest of UI
-        large_font = QFont(font_family, 14)  # Set larger font size; adjust size as needed
+    def delete_session(self):
+        selected_user = self.user_list_widget.currentItem()
+        selected_session = self.session_list_widget.currentItem()
+        if selected_user and selected_session:
+            session_folder = os.path.join("C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data", selected_user.text() + "_data", selected_session.text())
+            try:
+                # Remove the session directory and its contents
+                os.rmdir(session_folder)
+                print(f"Deleted session directory: {session_folder}")
+                self.update_session_list(os.path.join("C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data", selected_user.text() + "_data"))
+            except OSError as e:
+                print("Error deleting session directory:", e)
+        else:
+            print("No session selected for deletion.")
 
+    def update_user_list(self):
+        self.user_list_widget.clear()
+        data_directory = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data"
+        font_family, _, _ = get_label_style(self.parent.screen_height)  # Assuming get_label_style is adequate
+        custom_font = QFont(font_family, 20)  # You can adjust the size here as needed
+        
         for folder_name in os.listdir(data_directory):
             if folder_name.endswith('_data'):
-                # Extract user name from folder name
-                user_name = folder_name[:-5]  # Assuming '_data' is 5 characters long
-                item = QListWidgetItem(user_name)  # Create new item with user name
-                item.setFont(large_font)  # Set the font for this item
-                self.user_list_widget.addItem(item)  # Add to the list widget
-
+                user_name = folder_name[:-5]  # Strip '_data' to get the user name
+                item = QListWidgetItem(user_name)
+                item.setFont(custom_font)  # Apply the custom font to the item
+                self.user_list_widget.addItem(item)
         print("User list updated.")
+
+    def update_session_list(self):
+        if self.selected_user_folder:
+            self.session_list_widget.clear()
+            sessions = os.listdir(self.selected_user_folder)
+            font_family, _, _ = get_label_style(self.parent.screen_height)
+            custom_font = QFont(font_family, 20)  # Same font size as the user list for consistency
+            
+            for session in sessions:
+                item = QListWidgetItem(session)
+                item.setFont(custom_font)  # Apply the custom font to the item
+                self.session_list_widget.addItem(item)
+            print("Session list updated for", os.path.basename(self.selected_user_folder))
+
+    def user_selected(self):
+        selected_item = self.user_list_widget.currentItem()
+        if selected_item:
+            self.selected_user_folder = os.path.join("C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data", selected_item.text() + "_data")
+            self.update_session_list()
+            print(f"User selected: {selected_item.text()}")
+        else:
+            print("No user selected.")
+
+    def create_session(self):
+        if self.selected_user_folder:
+            timestamp = datetime.now().strftime("%d_%m_%Y_%H_%M")
+            session_folder = os.path.join(self.selected_user_folder, timestamp)
+            os.makedirs(session_folder, exist_ok=True)
+            self.update_session_list()
+            print(f"Session created: {session_folder}")
+        else:
+            print("No user selected for creating a session.")
+
+    def session_selected(self):
+        selected_item = self.session_list_widget.currentItem()
+        if selected_item:
+            session_folder = os.path.join("C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data", self.user_list_widget.currentItem().text() + "_data", selected_item.text())
+            self.parent.setDirectory(session_folder)  # Use setDirectory instead of setCurrentDirectory
+            print(f"Session selected: {session_folder}")
+        else:
+            print("No session selected.")
+
+    def add_user(self):
+        user_name = self.new_user_input.text().strip()
+        if user_name:
+            user_folder = os.path.join("C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data", user_name + "_data")
+            os.makedirs(user_folder, exist_ok=True)
+            self.update_user_list()
+            print(f"User added: {user_name}")
 
     def showEvent(self, event):
         super().showEvent(event)

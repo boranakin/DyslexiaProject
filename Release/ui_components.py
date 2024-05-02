@@ -20,8 +20,8 @@ class GazeVisualizer(QMainWindow):
         self.dwell_data = None
         self.other_buttons = []  # Store references to other buttons
         self.setupUI()
-        self.current_user = None
-        self.current_user_directory = None  # Ensure this attribute is initialized
+        self.current_directory = None  # Initialize the directory attribute
+        self.recording_process = None
     
     def toggle_night_mode(self):
         # Toggle the night mode state and update the stylesheet
@@ -70,35 +70,37 @@ class GazeVisualizer(QMainWindow):
 
         max_line_width = self.screen_width * 0.8  # Use 80% of screen width for text
         x_start = self.screen_width * 0.1  # Start 10% from the left
-        y_start = self.screen_height * 0.2  # Start 30% from the top, adjust as needed
+        y_start_adjustment = self.screen_height * 0.075  # Adjust this value to change the starting point variance
+        y_start = self.screen_height * 0.2 - y_start_adjustment
         x, y = x_start, y_start
 
-        self.labels = []  # This will store tuples of (identifier, QLabel object, word text)
+        self.labels = []
         for word in text.split():
-            word_width = fm.width(word + ' ')  # Include space in width calculation
-            if x + word_width > self.screen_width - x_start:  # Check if the word exceeds the max line width
-                x = x_start  # Reset x to start of line
-                y += int(line_height * line_spacing_factor)  # Increase y by the line height with added spacing
+            word_width = fm.width(word + ' ')
+            if x + word_width > self.screen_width - x_start:
+                x = x_start
+                y += int(line_height * line_spacing_factor)
 
-            identifier = f"{y}-{x}"  # Using the starting position as a simple identifier
+            identifier = f"{y}-{x}"
             label = QLabel(word, self)
             label.setFont(font)
-            label.adjustSize()  # Adjust label size to fit text
+            label.adjustSize()
+            label.setStyleSheet("background-color: rgba(225, 225, 225, 0.7);")  # Slightly darker shade of white as background
             label.move(int(x), int(y))
             label.show()
-            self.labels.append((identifier, label, word))  # Store identifier, QLabel, and word text
+            self.labels.append((identifier, label, word))
 
-            x += word_width  # Move x for the next word
+            x += word_width
 
         # Adjust vertical position if necessary
         total_text_height = y + line_height - y_start
-        if total_text_height < self.screen_height * 0.6:  # If text block is smaller than 60% of screen height
-            extra_space = (self.screen_height * 0.6 - total_text_height) / 2
-            total_text_height += 2 * extra_space  # Adjust total height based on extra space added
+        if total_text_height < self.screen_height * 0.6:
+            extra_space = (self.screen_height * 0.6 + self.screen_height * 0.05 - total_text_height) / 2
+            total_text_height += 2 * extra_space
             for identifier, label, word in self.labels:
                 label.move(label.x(), int(label.y() + extra_space))
 
-        self.total_text_height = total_text_height + y_start  # Add y_start to include the initial offset
+        self.total_text_height = total_text_height + y_start  # Include the adjusted initial offset
 
     def setupButtons(self):
         central_widget = QWidget(self)
@@ -180,176 +182,150 @@ class GazeVisualizer(QMainWindow):
         self.user_page = UserPage(self)
         self.user_page.show()
 
-    def startRecording(self):
-        if not self.current_user_directory:
-            print("No user selected for recording.")
+    def startRecording(self, directory):
+        if not directory:
+            print("No directory selected for recording.")
             return
 
         filename = 'gazeData.txt'
-        file_path = os.path.join(self.current_user_directory, filename)
+        file_path = os.path.join(directory, filename)
         
-        # Ensure the file is empty before starting to record
-        open(file_path, 'w').close()
-
-        # Define the path to the executable
+        open(file_path, 'w').close()  # Ensure the file is empty before starting to record
         executable_path = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/cpp_exec/Tobii_api_test1"
         window_id = str(self.winId().__int__())
-
-        # Include the full file path in the command
         cmd = [executable_path, window_id, file_path]
         self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print(f"Starting general recording with command: {cmd}")
 
-    def startCalibrationRecording(self, dot_id):
-        if not self.current_user_directory:
-            print("No user selected for calibration recording.")
+    def stopRecording(self):
+        if self.recording_process:
+            self.recording_process.terminate()
+            self.recording_process = None
+            print("Recording stopped.")
+
+    def startPlayback(self, directory):
+        if not directory:
+            print("No directory selected for playback.")
+            return
+
+        filename = 'gazeData_calibrated.txt'
+        file_path = os.path.join(directory, filename)
+
+        if os.path.exists(file_path):
+            gaze_data = []
+            with open(file_path, 'r') as file:
+                gaze_data = file.readlines()
+
+            self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels, directory)
+            self.gaze_processor.update_gaze_signal.connect(lambda ts, x, y: self.gaze_overlay.update_gaze_position(x, y))
+            self.gaze_processor.start()
+        else:
+            print("Calibrated gaze data file does not exist.")
+
+    '''def startRecording(self, directory):
+        if not directory:
+            print("No directory selected for recording.")
+            return
+
+        filename = 'gazeData.txt'
+        file_path = os.path.join(directory, filename)
+        
+        open(file_path, 'w').close()  # Ensure the file is empty before starting to record
+        executable_path = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/cpp_exec/Tobii_api_test1"
+        window_id = str(self.winId().__int__())
+        cmd = [executable_path, window_id, file_path]
+        self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"Starting general recording with command: {cmd}")'''
+
+    def startCalibrationRecording(self, dot_id, directory):
+        if not directory:
+            print("No directory selected for calibration recording.")
             return
 
         filename = f'gazeData_{dot_id}.txt'
-        file_path = os.path.join(self.current_user_directory, filename)
-        open(file_path, 'w').close()  # Ensures the file is empty before starting to record
+        file_path = os.path.join(directory, filename)
+        open(file_path, 'w').close()  # Ensure the file is empty before starting to record
         executable_path = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/cpp_exec/Tobii_api_test1"
         window_id = str(self.winId().__int__())
         cmd = [executable_path, window_id, file_path]
         self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print(f"Starting calibration recording for dot {dot_id} with command: {cmd}")
 
-    def stopRecording(self):
+    '''def stopRecording(self):
         if self.recording_process:
             self.recording_process.terminate()
             self.recording_process = None
-            print("Recording stopped.")  # Optional: Confirmation message for stopping the recording
+            print("Recording stopped.")  # Optional: Confirmation message for stopping the recording'''
 
-    def showHeatmapOnText(self):
-        folder_path = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data"
-        filename1 = 'gazeData.txt'
-        file_path3 = os.path.join(folder_path, filename1)
-        gaze_points = []
-        with open(file_path3, 'r') as file:
-            for line in file:
-                if 'Gaze point:' in line:
-                    _, gaze_str = line.split('] Gaze point: ')
-                    gaze_point = [float(val) for val in gaze_str.strip()[1:-1].split(',')]
-                    # Normalize gaze points for the screen dimensions
-                    screen_x, screen_y = normalize_gaze_to_screen(gaze_point, self.width(), self.height())
-                    gaze_points.append((screen_x, screen_y))
-
-        # Debugging: Print the number of parsed gaze points
-        print(f"Number of parsed gaze points: {len(gaze_points)}")
-        word_hit_file_path = "C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/word_hit_counts.txt"
-        word_hit_data = parse_word_hit_counts(word_hit_file_path)
-
-        if len(gaze_points) > 0:
-            #self.heatmap_overlay = HeatmapOverlay(gaze_points, self)
-            self.heatmap_overlay = HeatmapOverlay(gaze_points, word_hit_data, self)
-            self.heatmap_overlay.setGeometry(0, 0, self.width(), self.height())
-            self.heatmap_overlay.show()
-            self.heatmap_overlay.update()  # Explicitly request an update
-        else:
-            print("No gaze points parsed or heatmap overlay not properly set up.")
-
-    def startPlayback(self):
-        if not self.current_user_directory:
-            print("No user selected for playback.")
+    '''def startPlayback(self, directory):
+        if not directory:
+            print("No directory selected for playback.")
             return
 
         filename = 'gazeData_calibrated.txt'
-        file_path = os.path.join(self.current_user_directory, filename)
+        file_path = os.path.join(directory, filename)
 
         if os.path.exists(file_path):
             gaze_data = []
             with open(file_path, 'r') as file:
                 gaze_data = file.readlines()
 
-            self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels)
+            self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels, directory)
             self.gaze_processor.update_gaze_signal.connect(lambda ts, x, y: self.gaze_overlay.update_gaze_position(x, y))
             self.gaze_processor.start()
         else:
-            print("Calibrated gaze data file does not exist.")
-
-    def stopPlayback(self):
-        if self.gaze_processor and self.gaze_processor.isRunning():
-            self.gaze_processor.terminate()
-
-    def closeEvent(self, event):
-        # Check if gaze_processor exists and call write_hit_counts_to_file
-        if hasattr(self, 'gaze_processor') and self.gaze_processor is not None:
-            self.gaze_processor.write_hit_counts_to_file()
-        super().closeEvent(event)
-
-
-    def stopRecording(self):
-        if self.recording_process:
-            self.recording_process.terminate()
-            self.recording_process = None
-            print("Recording stopped.")  # Optional: Confirmation message for stopping the recording
-
-    def showHeatmapOnText(self):
-        if not self.current_user_directory:
-            print("No user selected to show heatmap.")
-            return
-
-        filename = 'gazeData.txt'
-        file_path = os.path.join(self.current_user_directory, filename)
-        gaze_points = []
-
-        if os.path.exists(file_path):
-            with open(file_path, 'r') as file:
-                for line in file:
-                    if 'Gaze point:' in line:
-                        _, gaze_str = line.split('] Gaze point: ')
-                        gaze_point = [float(val) for val in gaze_str.strip()[1:-1].split(',')]
-                        screen_x, screen_y = normalize_gaze_to_screen(gaze_point, self.width(), self.height())
-                        gaze_points.append((screen_x, screen_y))
-
-            print(f"Number of parsed gaze points: {len(gaze_points)}")  # Debugging: Print the number of parsed gaze points
-
-            word_hit_file_path = os.path.join(self.current_user_directory, "word_hit_counts.txt")
-            if os.path.exists(word_hit_file_path):
-                word_hit_data = parse_word_hit_counts(word_hit_file_path)
-                self.heatmap_overlay = HeatmapOverlay(gaze_points, word_hit_data, self)
-                self.heatmap_overlay.setGeometry(0, 0, self.width(), self.height())
-                self.heatmap_overlay.show()
-                self.heatmap_overlay.update()  # Explicitly request an update
-            else:
-                print("Word hit counts file does not exist.")
-        else:
-            print("Gaze data file does not exist.")
-
-    def startPlayback(self):
-        if not self.current_user_directory:
-            print("No user selected for playback.")
-            return
-
-        filename = 'gazeData_calibrated.txt'
-        file_path = os.path.join(self.current_user_directory, filename)
-
-        if os.path.exists(file_path):
-            gaze_data = []
-            with open(file_path, 'r') as file:
-                gaze_data = file.readlines()
-
-            self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels)
-            self.gaze_processor.update_gaze_signal.connect(lambda ts, x, y: self.gaze_overlay.update_gaze_position(x, y))
-            self.gaze_processor.start()
-        else:
-            print("Calibrated gaze data file does not exist.")
+            print("Calibrated gaze data file does not exist.")'''
 
     def stopPlayback(self):
         if self.gaze_processor and self.gaze_processor.isRunning():
             self.gaze_processor.terminate()
     
-    def setCurrentUser(self, user_name):
-        self.current_user = user_name
-        self.updateFilePaths()
-
-    def updateFilePaths(self):
-        if self.current_user:
-            self.current_user_directory = os.path.join("C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data", f"{self.current_user}_data")
-            os.makedirs(self.current_user_directory, exist_ok=True)
-            print(f"Data directory set to: {self.current_user_directory}")
+    def setDirectory(self, directory):
+        """Set the current working directory for user/session data."""
+        if os.path.exists(directory):
+            self.current_directory = directory
+            print(f"Data directory set to: {self.current_directory}")
         else:
-            self.current_user_directory = None  # Reset to None if no user is set
+            self.current_directory = None
+            print("Invalid directory. Please check the path and try again.")
+
+    def showHeatmapOnText(self):
+        """Show heatmap based on the gaze data stored in the current directory."""
+        if not self.current_directory:
+            print("No directory set. Please select a session or create a new one.")
+            return
+
+        filename = 'gazeData_calibrated.txt'
+        file_path = os.path.join(self.current_directory, filename)
+
+        if not os.path.exists(file_path):
+            print("Gaze data file does not exist.")
+            return
+
+        gaze_points = []
+        with open(file_path, 'r') as file:
+            for line in file:
+                if 'Gaze point:' in line:
+                    _, gaze_str = line.split('] Gaze point: ')
+                    gaze_point = [float(val) for val in gaze_str.strip()[1:-1].split(',')]
+                    screen_x, screen_y = normalize_gaze_to_screen(gaze_point, self.width(), self.height())
+                    gaze_points.append((screen_x, screen_y))
+
+        print(f"Number of parsed gaze points: {len(gaze_points)}")
+
+        word_hit_file_path = os.path.join(self.current_directory, "word_hit_counts.txt")
+        if not os.path.exists(word_hit_file_path):
+            print("Word hit counts file does not exist.")
+            return
+
+        word_hit_data = parse_word_hit_counts(word_hit_file_path)
+        if gaze_points:
+            self.heatmap_overlay = HeatmapOverlay(gaze_points, word_hit_data, self)
+            self.heatmap_overlay.setGeometry(0, 0, self.width(), self.height())
+            self.heatmap_overlay.show()
+            self.heatmap_overlay.update()
+        else:
+            print("No gaze points parsed or heatmap overlay not properly set up.")
 
     def closeEvent(self, event):
         # Check if gaze_processor exists and call write_hit_counts_to_file
