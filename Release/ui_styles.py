@@ -1,4 +1,7 @@
 # ui_styles.py
+from config import app_config
+import os
+
 def get_button_style(button_height):
     return f"""
         QPushButton {{
@@ -53,8 +56,17 @@ def get_label_style(screen_height):
     
     return font_family, font_size, line_spacing_factor
 
-def get_text_content():
-    return "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem..."
+def get_text_content(directory_path=None):
+    default_text = "Lorem Ipsum is simply dummy text of the printing and typesetting industry..."
+    if directory_path:
+        text_file_path = os.path.join(directory_path, "custom_text.txt")
+        if os.path.exists(text_file_path):
+            try:
+                with open(text_file_path, 'r') as file:
+                    return file.read()
+            except IOError as e:
+                print(f"Unable to read the text file: {e}")
+    return default_text
 
 # Define the styles as dictionary entries for easy retrieval.
 styles = {
