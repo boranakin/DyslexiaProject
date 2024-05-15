@@ -11,12 +11,14 @@ from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import make_pipeline
 
 from ui_styles import get_button_style, get_exit_button_style
+from config import app_config
 
 class CalibrationScreen(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(parent.size())  # Match the parent size
+        self.session_directory = app_config.session_directory  # Save the session directory
         self.dots = [
             (-0.6, -0.5), (0.6, -0.5), (-0.6, 0.5), (0.6, 0.5),
             (0.0, -0.5), (0.0, 0.5), (0.0, 0.0),
@@ -84,7 +86,7 @@ class CalibrationScreen(QWidget):
         if self.current_dot < len(self.dots):
             if self.current_dot > 0:
                 self.parent.stopRecording()
-            self.parent.startCalibrationRecording(self.current_dot)
+            self.parent.startCalibrationRecording(self.current_dot, self.session_directory)  # Pass directory explicitly if needed
             self.updateCurrentPosition()
             self.current_dot += 1
             if self.current_dot == len(self.dots):
@@ -116,13 +118,16 @@ class CalibrationScreen(QWidget):
 
         #results_path = f'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/calibration_results.txt'
         #file_path = f'C:/Users/borana/Documents/GitHub/DyslexiaProject/Release/data/gazeData_{index}.txt'
-
+    
     def analyzeCalibrationData(self):
-        if not self.parent.current_user_directory:
-            print("No user directory set for calibration.")
+        directory = app_config.session_directory
+        print("Debug: Session directory from AppConfig -", directory)
+        if not directory:
+            print("No session directory set for calibration.")
             return
 
-        results_path = os.path.join(self.parent.current_user_directory, 'calibration_results.txt')
+        results_path = os.path.join(directory, 'calibration_results.txt')
+        print("Debug: Results path -", results_path)
         measured_points = []
         expected_points = []
         try:
@@ -130,7 +135,8 @@ class CalibrationScreen(QWidget):
                 result_file.write("Calibration Results:\n")
                 result_file.write("Dot Index, Expected (X,Y), Measured (X,Y), Distance\n")
                 for index, expected in enumerate(self.dots):
-                    file_path = os.path.join(self.parent.current_user_directory, f'gazeData_{index}.txt')
+                    file_path = os.path.join(directory, f'gazeData_{index}.txt')
+                    print(f"Debug: Attempting to access file - {file_path}")
                     if os.path.exists(file_path):
                         gaze_points = self.read_gaze_data(file_path)
                         average_gaze_point = self.calculate_average_gaze_point(gaze_points, expected)
@@ -144,8 +150,8 @@ class CalibrationScreen(QWidget):
 
             if measured_points and expected_points:
                 self.fit_polynomial_regression(np.array(measured_points), np.array(expected_points))
-                original_file = os.path.join(self.parent.current_user_directory, 'gazeData.txt')
-                transformed_file = os.path.join(self.parent.current_user_directory, 'gazeData_calibrated.txt')
+                original_file = os.path.join(directory, 'gazeData.txt')
+                transformed_file = os.path.join(directory, 'gazeData_calibrated.txt')
                 self.preprocess_gaze_data(original_file, transformed_file)
         except Exception as e:
             print(f"Error during calibration data analysis: {e}")
@@ -153,7 +159,11 @@ class CalibrationScreen(QWidget):
     def fit_polynomial_regression(self, measured_points, expected_points, degree=2):
         model = make_pipeline(PolynomialFeatures(degree), LinearRegression())
         model.fit(measured_points, expected_points)
-        model_path = os.path.join(self.parent.current_user_directory, 'polynomial_regression_model.pkl')  # Ensure model is saved in the user-specific directory
+        directory = app_config.session_directory
+        if not directory:
+            print("No session directory set for saving the polynomial regression model.")
+            return
+        model_path = os.path.join(directory, 'polynomial_regression_model.pkl')  # Ensure model is saved in the session directory
         joblib.dump(model, model_path)  # Save the model to disk
         print(f"Polynomial regression model saved at: {model_path}")
 
@@ -185,7 +195,7 @@ class CalibrationScreen(QWidget):
         return ((measured[0] - expected[0])**2 + (measured[1] - expected[1])**2)**0.5
 
     def preprocess_gaze_data(self, original_file, transformed_file):
-        model_path = os.path.join(self.parent.current_user_directory, 'polynomial_regression_model.pkl')
+        model_path = os.path.join(self.session_directory, 'polynomial_regression_model.pkl')
         if os.path.exists(model_path):
             model = joblib.load(model_path)  # Load the model from the user-specific directory
             with open(original_file, 'r') as infile, open(transformed_file, 'w') as outfile:

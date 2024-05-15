@@ -5,7 +5,6 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt
 
 from ui_styles import get_button_style, get_exit_button_style, get_label_style
-
 from config import app_config
 
 class UserPage(QWidget):
@@ -13,7 +12,7 @@ class UserPage(QWidget):
         super().__init__(parent)
         self.setFixedSize(parent.size())
         self.parent = parent
-        #self.selected_user_folder = None
+        self.selected_user_folder = None
         self.initUI()
         self.update_user_list()
 
@@ -38,85 +37,89 @@ class UserPage(QWidget):
         top_layout.addWidget(self.exit_button, alignment=Qt.AlignRight)
         main_layout.addLayout(top_layout)
 
-        # User and Session list widgets
+        # User list widget and related buttons
+        user_layout = QHBoxLayout()
         self.user_list_widget = QListWidget(self)
         self.user_list_widget.setMaximumHeight(int(self.parent.screen_height * 0.3))
-        main_layout.addWidget(self.user_list_widget)
+        user_layout.addWidget(self.user_list_widget)
 
-        self.session_list_widget = QListWidget(self)
-        self.session_list_widget.setMaximumHeight(int(self.parent.screen_height * 0.3))
-        main_layout.addWidget(self.session_list_widget)
-
-        # Input field for new usernames/sessions
-        self.new_user_input = QLineEdit("Enter Username", self)
-        self.new_user_input.setFont(QFont(font_family, font_size))
-        main_layout.addWidget(self.new_user_input)
-
-        # Text input field for custom reading text
-        self.text_input = QTextEdit(self)
-        self.text_input.setPlaceholderText("Enter custom reading text here...")
-        self.text_input.setMaximumHeight(100)
-        main_layout.addWidget(self.text_input)
-
-        # Save Text Button
-        self.save_text_button = QPushButton("Save Text", self)
-        self.save_text_button.clicked.connect(self.save_custom_text)
-        self.save_text_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
-        self.save_text_button.setStyleSheet(get_button_style(button_height))
-        main_layout.addWidget(self.save_text_button)
-
-        # First and second rows of management buttons
-        self.setupManagementButtons(main_layout, font_family, font_size, button_height)
-
-        self.setLayout(main_layout)
-
-    def setupManagementButtons(self, main_layout, font_family, font_size, button_height):
-        # First row of management buttons
-        first_row_layout = QHBoxLayout()
-        self.add_user_button = QPushButton("Kullanıcı Oluştur", self)
-        self.add_user_button.clicked.connect(self.add_user)
-        self.add_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
-        self.add_user_button.setStyleSheet(get_button_style(button_height))
-        first_row_layout.addWidget(self.add_user_button)
-
-        self.create_session_button = QPushButton("Create Session", self)
-        self.create_session_button.clicked.connect(self.create_session)
-        self.create_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
-        self.create_session_button.setStyleSheet(get_button_style(button_height))
-        first_row_layout.addWidget(self.create_session_button)
-
-        self.select_session_button = QPushButton("Select Session", self)
-        self.select_session_button.clicked.connect(self.session_selected)
-        self.select_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
-        self.select_session_button.setStyleSheet(get_button_style(button_height))
-        first_row_layout.addWidget(self.select_session_button)
-        
-        main_layout.addLayout(first_row_layout)
-
-        # Second row of management buttons
-        second_row_layout = QHBoxLayout()
-        self.delete_session_button = QPushButton("Delete Session", self)
-        self.delete_session_button.clicked.connect(self.delete_session)
-        self.delete_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
-        self.delete_session_button.setStyleSheet(get_button_style(button_height))
-        second_row_layout.addWidget(self.delete_session_button)
+        user_buttons_layout = QVBoxLayout()
+        self.select_user_button = QPushButton("Select User", self)
+        self.select_user_button.clicked.connect(self.user_selected)
+        self.select_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.select_user_button.setStyleSheet(get_button_style(button_height))
+        user_buttons_layout.addWidget(self.select_user_button)
 
         self.delete_user_button = QPushButton("Delete User", self)
         self.delete_user_button.clicked.connect(self.delete_user)
         self.delete_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
         self.delete_user_button.setStyleSheet(get_button_style(button_height))
-        second_row_layout.addWidget(self.delete_user_button)
+        user_buttons_layout.addWidget(self.delete_user_button)
 
-        self.select_user_button = QPushButton("Select User", self)
-        self.select_user_button.clicked.connect(self.user_selected)
-        self.select_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
-        self.select_user_button.setStyleSheet(get_button_style(button_height))
-        second_row_layout.addWidget(self.select_user_button)
-        
-        main_layout.addLayout(second_row_layout)
+        user_layout.addLayout(user_buttons_layout)
+        main_layout.addLayout(user_layout)
+
+        # Session list widget and related buttons
+        session_layout = QHBoxLayout()
+        self.session_list_widget = QListWidget(self)
+        self.session_list_widget.setMaximumHeight(int(self.parent.screen_height * 0.3))
+        session_layout.addWidget(self.session_list_widget)
+
+        session_buttons_layout = QVBoxLayout()
+        self.select_session_button = QPushButton("Select Session", self)
+        self.select_session_button.clicked.connect(self.session_selected)
+        self.select_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.select_session_button.setStyleSheet(get_button_style(button_height))
+        session_buttons_layout.addWidget(self.select_session_button)
+
+        self.create_session_button = QPushButton("Create Session", self)
+        self.create_session_button.clicked.connect(self.create_session)
+        self.create_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.create_session_button.setStyleSheet(get_button_style(button_height))
+        session_buttons_layout.addWidget(self.create_session_button)
+
+        self.delete_session_button = QPushButton("Delete Session", self)
+        self.delete_session_button.clicked.connect(self.delete_session)
+        self.delete_session_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.delete_session_button.setStyleSheet(get_button_style(button_height))
+        session_buttons_layout.addWidget(self.delete_session_button)
+
+        session_layout.addLayout(session_buttons_layout)
+        main_layout.addLayout(session_layout)
+
+        # Input field for new usernames and create user button
+        user_input_layout = QHBoxLayout()
+        self.new_user_input = QLineEdit("Enter Username", self)
+        self.new_user_input.setFont(QFont(font_family, font_size))
+        user_input_layout.addWidget(self.new_user_input)
+
+        self.add_user_button = QPushButton("Create User", self)
+        self.add_user_button.clicked.connect(self.add_user)
+        self.add_user_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.add_user_button.setStyleSheet(get_button_style(button_height))
+        user_input_layout.addWidget(self.add_user_button)
+
+        main_layout.addLayout(user_input_layout)
+
+        # Text input field for custom reading text and save text button
+        text_layout = QHBoxLayout()
+        self.text_input = QTextEdit(self)
+        self.text_input.setPlaceholderText("Enter custom reading text here...")
+        self.text_input.setMaximumHeight(100)
+        text_layout.addWidget(self.text_input)
+
+        self.save_text_button = QPushButton("Save Text", self)
+        self.save_text_button.clicked.connect(self.save_custom_text)
+        self.save_text_button.setFixedSize(int(self.parent.screen_width * 0.15), button_height)
+        self.save_text_button.setStyleSheet(get_button_style(button_height))
+        text_layout.addWidget(self.save_text_button, alignment=Qt.AlignRight)
+
+        main_layout.addLayout(text_layout)
+
+        self.setLayout(main_layout)
 
     def save_custom_text(self):
-        if app_config.session_directory:  # Use AppConfig to get the session directory
+        if app_config.session_directory:
             text = self.text_input.toPlainText()
             if len(text) > 1000:
                 print("Text is too long, please limit to 1000 characters.")

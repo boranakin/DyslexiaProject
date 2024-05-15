@@ -22,6 +22,7 @@ class GazeVisualizer(QMainWindow):
         self.setupUI()
         self.current_directory = None  # Initialize the directory attribute
         self.recording_process = None
+        self.gaze_processor = None
     
     def toggle_night_mode(self):
         # Toggle the night mode state and update the stylesheet
@@ -42,7 +43,7 @@ class GazeVisualizer(QMainWindow):
 
     def hideUI(self):
         # Hide all non-essential UI elements except 'Next' and 'Exit'
-        self.night_mode_button.hide()
+        #self.night_mode_button.hide()
         for label in self.labels:
             label[1].hide()
         self.gaze_overlay.hide()
@@ -52,7 +53,7 @@ class GazeVisualizer(QMainWindow):
 
     def showUI(self):
         # Restore all UI elements after calibration
-        self.night_mode_button.show()
+        #self.night_mode_button.show()
         for label in self.labels:
             label[1].show()
         self.gaze_overlay.show()
@@ -72,9 +73,9 @@ class GazeVisualizer(QMainWindow):
 
         max_line_width = self.screen_width * 0.8  # Use 80% of screen width for text
         x_start = self.screen_width * 0.1  # Start 10% from the left
-        y_start_adjustment = self.screen_height * 0.075  # Adjust this value to change the starting point variance
-        y_start = self.screen_height * 0.2 - y_start_adjustment
-        x, y = x_start, y_start
+        top_margin = self.screen_height * 0.08  # Adjust the top margin to increase distance from the top edge
+        bottom_margin = self.screen_height * 0.15  # Adjust the bottom margin to increase distance from the bottom edge
+        x, y = x_start, top_margin
 
         self.labels = []
         for word in text.split():
@@ -94,23 +95,21 @@ class GazeVisualizer(QMainWindow):
 
             x += word_width
 
-        # Adjust vertical position if necessary
-        total_text_height = y + line_height - y_start
-        if total_text_height < self.screen_height * 0.6:
-            extra_space = (self.screen_height * 0.6 + self.screen_height * 0.05 - total_text_height) / 2
+        # Adjust vertical position if necessary to ensure bottom margin
+        total_text_height = y + line_height - top_margin
+        if total_text_height < self.screen_height - bottom_margin:
+            extra_space = (self.screen_height - bottom_margin - total_text_height) / 2
             total_text_height += 2 * extra_space
             for identifier, label, word in self.labels:
                 label.move(label.x(), int(label.y() + extra_space))
 
-        self.total_text_height = total_text_height + y_start  # Include the adjusted initial offset
+        self.total_text_height = total_text_height + top_margin  # Include the adjusted initial offset
+
 
     def setupButtons(self):
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         margins = int(self.screen_width * 0.03)  # Margin for general spacing
-
-        # Calculate the vertical position for the exit button based on screen height
-        vertical_margin = int(self.screen_height * 0.05)  # Adjust this value to change the vertical position
 
         # Setup Exit Button
         exit_button_size = int(self.screen_height * 0.05 * self.dpi_scale_factor)
@@ -118,38 +117,27 @@ class GazeVisualizer(QMainWindow):
         self.exit_button.setFixedSize(exit_button_size, exit_button_size)
         self.exit_button.clicked.connect(self.close)
         self.exit_button.setStyleSheet(get_exit_button_style(exit_button_size))
-        self.exit_button.move(self.width() - exit_button_size - margins, vertical_margin)  # Top right corner
-
-        night_mode_button_width = int(self.screen_width * 0.12 * self.dpi_scale_factor)
-        night_mode_button_height = int(self.screen_height * 0.06 * self.dpi_scale_factor)
-        self.night_mode_button = QPushButton('Nightmode', self)
-        self.night_mode_button.setFixedSize(night_mode_button_width, night_mode_button_height)
-        self.night_mode_button.clicked.connect(self.toggle_night_mode)
-        self.night_mode_button.setStyleSheet(get_button_style(night_mode_button_height))
-        night_mode_button_y = vertical_margin + exit_button_size + int(vertical_margin * 0.33) # 5 pixels space between buttons
-        self.night_mode_button.move(self.width() - night_mode_button_width - margins, night_mode_button_y)
-
+        self.exit_button.move(self.width() - exit_button_size - margins, margins)  # Top right corner
         self.exit_button.setParent(central_widget)
-        self.night_mode_button.setParent(central_widget)
 
-        # Calculate start position for the bottom row of buttons
+        # Define button sizes and spacing for bottom row
         button_width = int(self.screen_width * 0.12 * self.dpi_scale_factor)
         button_height = int(self.screen_height * 0.06 * self.dpi_scale_factor)
         button_spacing = 10  # Spacing between buttons
 
+        # List of functions with their respective button labels
         functions = [
-            (self.startRecording, 'Record'),
-            (self.stopRecording, 'Stop Recording'),
-            (self.startPlayback, 'Playback'),
-            (self.stopPlayback, 'Stop Playback'),
+            (self.toggleRecording, 'Record'),
+            (self.togglePlayback, 'Playback'),
             (self.startCalibration, 'Calibrate'),
-            (self.showHeatmapOnText, 'Project Heatmap'),
-            (self.openUserPage, 'Users')
+            (self.openUserPage, 'Users'),
+            (self.toggle_night_mode, 'Nightmode')
         ]
 
         total_buttons_width = len(functions) * button_width + (len(functions) - 1) * button_spacing
         start_x = (self.width() - total_buttons_width) // 2  # Center the block of buttons
 
+        # Place all functional buttons on the bottom row
         self.other_buttons = []  # List to manage other buttons
         x_position = start_x
         for func, name in functions:
@@ -157,10 +145,14 @@ class GazeVisualizer(QMainWindow):
             button.clicked.connect(func)
             button.setFixedSize(button_width, button_height)
             button.setStyleSheet(get_button_style(button_height))
-            button.move(x_position, self.height() - button_height - vertical_margin)  # Position at bottom
+            button.move(x_position, self.height() - button_height - margins)  # Position at bottom
             x_position += button_width + button_spacing
             button.setParent(central_widget)
             self.other_buttons.append(button)
+
+        # Store references to specific buttons for later use
+        self.record_button = self.other_buttons[0]
+        self.playback_button = self.other_buttons[1]
 
     def startCalibration(self):
         self.calibration_screen = CalibrationScreen(self)
@@ -170,46 +162,71 @@ class GazeVisualizer(QMainWindow):
         # This assumes you have a class `UserPage` defined elsewhere
         self.user_page = UserPage(self)
         self.user_page.show()
+    
+    def toggleRecording(self):
+        if self.recording_process:
+            # Stop the recording if it is currently running
+            self.recording_process.terminate()
+            self.recording_process = None
+            self.record_button.setText("Record")  # Update button text to reflect available action
+            print("Recording stopped.")
+        else:
+            directory = app_config.session_directory
+            if not directory:
+                print("No directory selected for recording.")
+                return
+            
+            filename = 'gazeData.txt'
+            file_path = os.path.join(directory, filename)
+            
+            open(file_path, 'w').close()  # Ensure the file is empty before starting to record
+            executable_path = "/Users/borana/Documents/GitHub/DyslexiaProject/Release/cpp_exec/Tobii_api_test1"
+            window_id = str(self.winId().__int__())
+            cmd = [executable_path, window_id, file_path]
+            self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.record_button.setText("Stop Recording")  # Update button text to reflect available action
+            print(f"Starting general recording with command: {cmd}")
 
-    def startRecording(self, directory):
-        if not directory:
-            print("No directory selected for recording.")
-            return
+    def togglePlayback(self):
+        if self.gaze_processor and self.gaze_processor.isRunning():
+            # Stop the playback if it is currently running
+            self.gaze_processor.terminate()
+            self.gaze_processor = None
+            self.playback_button.setText("Playback")  # Update button text to reflect available action
+            print("Playback stopped.")
+        else:
+            directory = app_config.session_directory
+            if not directory:
+                print("No directory selected for playback.")
+                return
 
-        filename = 'gazeData.txt'
-        file_path = os.path.join(directory, filename)
-        
-        open(file_path, 'w').close()  # Ensure the file is empty before starting to record
-        executable_path = "/Users/borana/Documents/GitHub/DyslexiaProject/Release/cpp_exec/Tobii_api_test1"
-        window_id = str(self.winId().__int__())
-        cmd = [executable_path, window_id, file_path]
-        self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(f"Starting general recording with command: {cmd}")
+            filename = 'gazeData_calibrated.txt'
+            file_path = os.path.join(directory, filename)
+
+            if os.path.exists(file_path):
+                gaze_data = []
+                with open(file_path, 'r') as file:
+                    gaze_data = file.readlines()
+
+                self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels, directory)
+                self.gaze_processor.update_gaze_signal.connect(lambda ts, x, y: self.gaze_overlay.update_gaze_position(x, y))
+                self.gaze_processor.finished.connect(self.onPlaybackFinished)  # Connect the finished signal to the slot
+                self.gaze_processor.start()
+                self.playback_button.setText("Stop Playback")  # Update button text to reflect available action
+                print("Playback started.")
+            else:
+                print("Calibrated gaze data file does not exist.")
+    
+    def onPlaybackFinished(self):
+        self.gaze_processor = None
+        self.playback_button.setText("Playback")
+        print("Playback finished.")
 
     def stopRecording(self):
         if self.recording_process:
             self.recording_process.terminate()
             self.recording_process = None
             print("Recording stopped.")
-
-    def startPlayback(self, directory):
-        if not directory:
-            print("No directory selected for playback.")
-            return
-
-        filename = 'gazeData_calibrated.txt'
-        file_path = os.path.join(directory, filename)
-
-        if os.path.exists(file_path):
-            gaze_data = []
-            with open(file_path, 'r') as file:
-                gaze_data = file.readlines()
-
-            self.gaze_processor = GazeDataProcessor(gaze_data, self.width(), self.height(), self.labels, directory)
-            self.gaze_processor.update_gaze_signal.connect(lambda ts, x, y: self.gaze_overlay.update_gaze_position(x, y))
-            self.gaze_processor.start()
-        else:
-            print("Calibrated gaze data file does not exist.")
 
     def startCalibrationRecording(self, dot_id, directory):
         if not directory:
@@ -225,19 +242,15 @@ class GazeVisualizer(QMainWindow):
         self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print(f"Starting calibration recording for dot {dot_id} with command: {cmd}")
 
-    def stopPlayback(self):
-        if self.gaze_processor and self.gaze_processor.isRunning():
-            self.gaze_processor.terminate()
-    
     def setDirectory(self, directory):
         """Set the current working directory for user/session data."""
         if os.path.exists(directory):
-            self.current_directory = directory
-            print(f"Data directory set to: {self.current_directory}")
+            app_config.session_directory = directory
+            print(f"Data directory set to: {directory}")
         else:
-            self.current_directory = None
+            app_config.session_directory = None
             print("Invalid directory. Please check the path and try again.")
-    
+
     def updateTextDisplay(self):
         # This method updates the text content on the display
         text = get_text_content(app_config.session_directory)
@@ -245,12 +258,13 @@ class GazeVisualizer(QMainWindow):
 
     def showHeatmapOnText(self):
         """Show heatmap based on the gaze data stored in the current directory."""
-        if not self.current_directory:
+        directory = app_config.session_directory
+        if not directory:
             print("No directory set. Please select a session or create a new one.")
             return
 
         filename = 'gazeData_calibrated.txt'
-        file_path = os.path.join(self.current_directory, filename)
+        file_path = os.path.join(directory, filename)
 
         if not os.path.exists(file_path):
             print("Gaze data file does not exist.")
@@ -267,7 +281,7 @@ class GazeVisualizer(QMainWindow):
 
         print(f"Number of parsed gaze points: {len(gaze_points)}")
 
-        word_hit_file_path = os.path.join(self.current_directory, "word_hit_counts.txt")
+        word_hit_file_path = os.path.join(directory, "word_hit_counts.txt")
         if not os.path.exists(word_hit_file_path):
             print("Word hit counts file does not exist.")
             return
